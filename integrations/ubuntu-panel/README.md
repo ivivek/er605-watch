@@ -1,9 +1,10 @@
 # ER605 status in the Ubuntu top panel
 
 A small **AppIndicator** tray icon that shows ER605 dual-WAN status in the GNOME
-top panel: a colored dot (🟢 ok · 🟡 degraded · 🔴 down · ⚫ router unreachable)
-with `up/total` count, and a dropdown of per-WAN details (status, IP, gateway,
-and ping/RTT in full mode).
+top panel: a custom transmit/receive glyph **tinted by state** (green ok · amber
+degraded · red down · grey unreachable, from `icons/`), a hover tooltip with a
+one-line summary, and a polished dropdown — a colored status dot per WAN next to
+the **ISP name** and state, with IP / gateway / ping-RTT on a dim second line.
 
 Unlike the [Home Assistant integration](../home-assistant/), this runs
 **`er605-watch` directly** on your desktop — no broker needed. Router

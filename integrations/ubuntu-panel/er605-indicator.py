@@ -2,16 +2,16 @@
 # =============================================================
 # ER605 dual-WAN status — Ubuntu top-panel (AppIndicator) tray icon.
 #
-# Runs `er605-watch --json` on a timer and shows a colored status dot in the
-# GNOME panel with a dropdown of per-WAN details. Direct mode: it drives the
-# router itself (no MQTT/broker needed); router creds come from the repo-root
-# .env, same as er605-watch.
+# Runs `er605-watch --json` on a timer and shows a custom tinted status icon in
+# the GNOME panel (green/amber/red/grey transmit-receive arrows) with a polished
+# dropdown: per-WAN status-dot rows, IP/gateway/RTT, internet, last-updated.
+# Direct mode — it drives the router itself; creds come from the repo-root .env.
 #
-# Deps: python3-gi, gir1.2-ayatanaappindicator3-0.1 (or gir1.2-appindicator3),
-#       plus er605-watch's own deps (expect, jq, ssh). See install.sh.
+# Deps: python3-gi, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1
+#       (or gir1.2-appindicator3-0.1), plus er605-watch's expect/jq/ssh.
 #
 # Env knobs:
-#   ER605_PANEL_INTERVAL  poll seconds (default 60)
+#   ER605_PANEL_INTERVAL  poll seconds (default 60, min 15)
 #   ER605_WATCH           path to er605-watch (default: ../../er605-watch)
 # =============================================================
 import os
@@ -21,7 +21,6 @@ import subprocess
 
 import gi
 gi.require_version("Gtk", "3.0")
-# Prefer the maintained Ayatana fork; fall back to legacy AppIndicator3.
 try:
     gi.require_version("AyatanaAppIndicator3", "0.1")
     from gi.repository import AyatanaAppIndicator3 as AppIndicator
@@ -31,47 +30,47 @@ except (ValueError, ImportError):
 from gi.repository import Gtk, GLib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ICONS = os.path.join(HERE, "icons")
 WATCH = os.environ.get("ER605_WATCH", os.path.realpath(os.path.join(HERE, "..", "..", "er605-watch")))
 INTERVAL = max(15, int(os.environ.get("ER605_PANEL_INTERVAL", "60")))
 
-# Panel icon (monochrome, theme-adaptive) + a colored emoji dot in the label so
-# the state reads at a glance even where symbolic icons are all one color.
-STATE_ICON = {
-    "ok":          "network-transmit-receive-symbolic",
-    "degraded":    "network-error-symbolic",
-    "down":        "network-offline-symbolic",
-    "unreachable": "network-wired-disconnected-symbolic",
-    "unknown":     "network-idle-symbolic",
-}
-STATE_DOT = {"ok": "🟢", "degraded": "🟡", "down": "🔴", "unreachable": "⚫", "unknown": "…"}
+# overall state -> panel icon name (file icons/<name>.svg) + menu dot.
+STATE_ICON = {"ok": "er605-ok", "degraded": "er605-degraded",
+              "down": "er605-down", "unreachable": "er605-unreachable",
+              "unknown": "er605-unreachable"}
+STATE_DOT = {"ok": "dot-green", "degraded": "dot-amber",
+             "down": "dot-red", "unreachable": "dot-grey", "unknown": "dot-grey"}
+
+
+def esc(s):
+    return GLib.markup_escape_text(str(s))
 
 
 class ER605Indicator:
     def __init__(self):
-        self.ind = AppIndicator.Indicator.new(
-            "er605-wan", STATE_ICON["unknown"],
-            AppIndicator.IndicatorCategory.SYSTEM_SERVICES)
+        self.ind = AppIndicator.Indicator.new_with_path(
+            "er605-wan", "er605-unreachable",
+            AppIndicator.IndicatorCategory.SYSTEM_SERVICES, ICONS)
         self.ind.set_status(AppIndicator.IndicatorStatus.ACTIVE)
         self.ind.set_title("ER605 WAN status")
-        self.ind.set_label("…", "er605")
+        self.ind.set_label("", "er605-wan")   # icon-only, no text in the bar
 
         self.menu = Gtk.Menu()
         self.ind.set_menu(self.menu)
         self._busy = False
         self._render({"overall": "unknown", "_note": "starting…"})
 
-        # First poll shortly after launch, then every INTERVAL.
-        GLib.timeout_add(500, self._kick_fast_once)
+        GLib.timeout_add(500, self._kick_once)
         GLib.timeout_add_seconds(INTERVAL, self._tick)
 
     # ---- polling -------------------------------------------------
-    def _kick_fast_once(self):
+    def _kick_once(self):
         self.refresh(full=False)
-        return False  # one-shot
+        return False
 
     def _tick(self):
         self.refresh(full=False)
-        return True   # keep the periodic timer
+        return True
 
     def refresh(self, full=False):
         if self._busy:
@@ -89,7 +88,6 @@ class ER605Indicator:
             data = {"overall": "unreachable", "error": "er605-watch timed out"}
         except Exception as e:
             data = {"overall": "unreachable", "error": f"{type(e).__name__}: {e}"}
-        # Hand back to the GTK main thread.
         GLib.idle_add(self._render, data)
         GLib.idle_add(self._done)
 
@@ -97,78 +95,120 @@ class ER605Indicator:
         self._busy = False
         return False
 
+    # ---- icon/colour helpers -------------------------------------
+    @staticmethod
+    def _wan_dot(w):
+        if not w.get("up"):
+            return "dot-red"
+        ping = w.get("ping")
+        if ping and ping.get("state") == "degraded":
+            return "dot-amber"
+        return "dot-green"
+
     # ---- rendering -----------------------------------------------
     def _render(self, data):
         overall = data.get("overall", "unknown")
-        dot = STATE_DOT.get(overall, "…")
-        self.ind.set_icon_full(STATE_ICON.get(overall, STATE_ICON["unknown"]), f"ER605 {overall}")
+        self.ind.set_icon_full(STATE_ICON.get(overall, "er605-unreachable"), f"ER605 {overall}")
 
         wans = data.get("wans") or []
         up = sum(1 for w in wans if w.get("up"))
-        label = dot if not wans else f"{dot} {up}/{len(wans)}"
-        self.ind.set_label(label, "er605")
+        if data.get("error"):
+            self.ind.set_title(f"ER605: {overall} — {data['error']}")
+        elif wans:
+            self.ind.set_title(f"ER605: {overall.upper()} · {up}/{len(wans)} WANs up")
+        else:
+            self.ind.set_title(f"ER605: {overall}")
 
-        # Rebuild the dropdown from scratch each refresh.
         for child in self.menu.get_children():
             self.menu.remove(child)
 
-        self._item(f"Overall: {overall.upper()}", bold=True)
+        # Header: overall state with a colour dot.
+        self._info(STATE_DOT.get(overall, "dot-grey"),
+                   f"<b>ER605 — {esc(overall.upper())}</b>")
         if data.get("error"):
-            self._item(f"  ⚠ {data['error']}")
+            self._info(None, f"<span alpha='65%'>⚠ {esc(data['error'])}</span>")
         if data.get("_note"):
-            self._item(f"  {data['_note']}")
+            self._info(None, f"<span alpha='55%'>{esc(data['_note'])}</span>")
 
-        for i, w in enumerate(wans):
-            name = w.get("isp") or w.get("name") or f"WAN{i+1}"
-            port = w.get("port", i + 1)
-            state = "UP" if w.get("up") else (w.get("status") or "DOWN")
+        # Per-WAN rows: dot + two-line label (name/state, then dim details).
+        if wans:
             self._sep()
-            self._item(f"{name} (WAN{port}): {state}", bold=True)
+        for i, w in enumerate(wans):
+            name = w.get("isp") or w.get("name") or f"WAN{i + 1}"
+            port = w.get("port", i + 1)
+            state = "up" if w.get("up") else (w.get("status") or "down")
+            bits = []
             if w.get("ip"):
-                self._item(f"  IP: {w['ip']}")
+                bits.append(esc(w["ip"]))
             if w.get("gateway"):
-                self._item(f"  Gateway: {w['gateway']}")
+                bits.append("gw " + esc(w["gateway"]))
             ping = w.get("ping")
             if ping:
-                loss = ping.get("loss_pct")
                 rtt = ping.get("rtt_ms")
-                self._item(f"  Ping: {ping.get('state','?')}"
-                           + (f"  {rtt}ms" if rtt is not None else "")
-                           + (f"  {loss}% loss" if loss is not None else ""))
+                loss = ping.get("loss_pct")
+                if rtt is not None:
+                    bits.append(f"{esc(rtt)} ms")
+                if loss:
+                    bits.append(f"{esc(loss)}% loss")
+            primary = f"<b>{esc(name)} (WAN{esc(port)})</b>  {esc(state).upper()}"
+            markup = primary
+            if bits:
+                markup += f"\n<span size='small' alpha='55%'>{' · '.join(bits)}</span>"
+            self._info(self._wan_dot(w), markup)
 
         inet = data.get("internet")
         if inet:
             self._sep()
-            self._item(f"Internet → {inet.get('target','?')}: {inet.get('state','?')}"
-                       + (f"  {inet.get('rtt_ms')}ms" if inet.get("rtt_ms") is not None else ""))
+            extra = f" · {esc(inet.get('rtt_ms'))} ms" if inet.get("rtt_ms") is not None else ""
+            self._info("dot-green" if inet.get("online") else "dot-red",
+                       f"Internet → {esc(inet.get('target', '?'))}  "
+                       f"<span alpha='70%'>{esc(inet.get('state', '?'))}{extra}</span>")
 
         ts = data.get("timestamp")
         if ts:
             self._sep()
-            self._item(f"Updated: {ts.replace('T', ' ')[:19]}")
+            self._info(None, f"<span size='small' alpha='55%'>Updated {esc(ts.replace('T', ' ')[:19])}</span>")
 
         self._sep()
-        self._action("Refresh now", lambda _:(self.refresh(full=False)))
-        self._action("Full check (ping/RTT)", lambda _:(self.refresh(full=True)))
+        self._action("view-refresh-symbolic", "Refresh now", lambda _: self.refresh(False))
+        self._action("emblem-synchronizing-symbolic", "Full check (ping / RTT)", lambda _: self.refresh(True))
         self._sep()
-        self._action("Quit", lambda _: Gtk.main_quit())
+        self._action("application-exit-symbolic", "Quit", lambda _: Gtk.main_quit())
         self.menu.show_all()
-        return False  # for GLib.idle_add
+        return False
 
-    # ---- tiny menu helpers ---------------------------------------
-    def _item(self, text, bold=False):
-        it = Gtk.MenuItem(label=text)
-        it.set_sensitive(False)
-        if bold:
-            lbl = it.get_child()
-            if lbl:
-                lbl.set_markup(f"<b>{GLib.markup_escape_text(text)}</b>")
-        self.menu.append(it)
+    # ---- menu-row builders ---------------------------------------
+    def _icon_widget(self, icon):
+        """icon: a dot-* name (file in icons/) or a themed *-symbolic name, or None."""
+        if not icon:
+            img = Gtk.Image()
+            img.set_size_request(16, 16)      # keep text aligned with iconed rows
+            return img
+        path = os.path.join(ICONS, icon + ".svg")
+        if os.path.exists(path):
+            return Gtk.Image.new_from_file(path)
+        return Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.MENU)
 
-    def _action(self, text, cb):
-        it = Gtk.MenuItem(label=text)
-        it.connect("activate", cb)
-        self.menu.append(it)
+    def _info(self, icon, markup):
+        item = Gtk.MenuItem()
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=9)
+        box.pack_start(self._icon_widget(icon), False, False, 0)
+        lbl = Gtk.Label(xalign=0.0)
+        lbl.set_markup(markup)
+        box.pack_start(lbl, True, True, 0)
+        item.add(box)
+        item.set_sensitive(False)
+        self.menu.append(item)
+
+    def _action(self, icon, text, cb):
+        item = Gtk.MenuItem()
+        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=9)
+        box.pack_start(self._icon_widget(icon), False, False, 0)
+        lbl = Gtk.Label(label=text, xalign=0.0)
+        box.pack_start(lbl, True, True, 0)
+        item.add(box)
+        item.connect("activate", cb)
+        self.menu.append(item)
 
     def _sep(self):
         self.menu.append(Gtk.SeparatorMenuItem())
