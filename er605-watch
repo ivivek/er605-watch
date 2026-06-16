@@ -44,6 +44,11 @@ WAN2_PORT="${WAN2_PORT:-2}"
 WAN1_GW="${WAN1_GW:-}"
 WAN2_GW="${WAN2_GW:-}"
 
+# Friendly ISP labels per WAN (optional, site-specific → keep in .env). When set,
+# output shows e.g. "Airtel Fiber (WAN1)" instead of bare "WAN1". Unset → WANn.
+WAN1_ISP="${WAN1_ISP:-}"
+WAN2_ISP="${WAN2_ISP:-}"
+
 # Public IP to test overall internet reachability (follows the active route)
 PING_PUBLIC="${PING_PUBLIC:-8.8.8.8}"
 
@@ -171,7 +176,9 @@ wan_gateway() { get_field "$1" "Default Gateway"; }
 # Display one WAN's parsed details (stdout). If $3 (the configured gateway) is
 # set and differs from the live gateway, warn about config drift.
 show_wan() {
-    local block="$1" label="$2" cfg_gw="$3"
+    local block="$1" label="$2" cfg_gw="$3" isp="$4"
+    local hdr="${label} (switchport)"
+    [[ -n "$isp" ]] && hdr="${isp} (${label})"
     local name type status proto ip gw dns
     name=$(get_field "$block"   "Port name")
     type=$(get_field "$block"   "Vlan type")
@@ -181,7 +188,7 @@ show_wan() {
     gw=$(get_field "$block"     "Default Gateway")
     dns=$(get_field "$block"    "Primary DNS")
 
-    echo -e "${BOLD}── ${label} (switchport) ───────────────────────${RESET}"
+    echo -e "${BOLD}── ${hdr} ───────────────────────${RESET}"
     echo -e "  Port Name : ${name:-?}"
     echo -e "  Type      : ${type:-?}"
     if [[ "${status^^}" == "UP" ]]; then
@@ -238,7 +245,7 @@ ping_state() {
 jnum() { [[ -n "$1" ]] && printf '%s' "$1" || printf 'null'; }
 
 # Build one WAN's JSON object. Args: port name type status proto ip live_gw
-#                                     state ping_target loss rtt
+#                                     state ping_target loss rtt isp
 wan_json() {
     local ping='null'
     if [[ $DO_PINGS -eq 1 ]]; then
@@ -246,9 +253,9 @@ wan_json() {
                      --argjson rtt "$(jnum "${11}")" --arg st "$8" \
             '{target:$t, loss_pct:$loss, rtt_ms:$rtt, state:$st, online:($st!="offline")}')
     fi
-    jq -n --argjson port "$1" --arg name "$2" --arg type "$3" --arg status "$4" \
+    jq -n --argjson port "$1" --arg name "$2" --arg isp "${12}" --arg type "$3" --arg status "$4" \
           --arg proto "$5" --arg ip "$6" --arg gw "$7" --arg st "$8" --argjson ping "$ping" \
-        '{port:$port, name:$name, type:$type, status:$status, proto:$proto,
+        '{port:$port, name:$name, isp:$isp, type:$type, status:$status, proto:$proto,
           ip:$ip, gateway:$gw, up:($st!="offline"), ping:$ping}'
 }
 
@@ -305,6 +312,9 @@ IFS=$'\t' read -r w2_name w2_type w2_status w2_proto w2_ip w2_gw w2_dns < <(read
 # Gateway to test = configured value if set, else the live one from switchport.
 g1="${WAN1_GW:-$w1_gw}"; g2="${WAN2_GW:-$w2_gw}"
 
+# Friendly per-WAN label for the summary ("ISP" if set, else "WANn").
+lbl1="${WAN1_ISP:-WAN1}"; lbl2="${WAN2_ISP:-WAN2}"
+
 # Connectivity tests (skipped in --fast). Run a 2nd login if not already done.
 PRAW="$RAW"
 if [[ $DO_PINGS -eq 1 && $DISCOVER -eq 1 ]]; then
@@ -345,8 +355,8 @@ TRACE_BLOCK=""
 
 # ─── RENDER ───────────────────────────────────────────────────
 if [[ $JSON_MODE -eq 1 ]]; then
-    wan1_obj=$(wan_json "$WAN1_PORT" "$w1_name" "$w1_type" "$w1_status" "$w1_proto" "$w1_ip" "$w1_gw" "$w1_state" "$g1" "$w1_loss" "$w1_rtt")
-    wan2_obj=$(wan_json "$WAN2_PORT" "$w2_name" "$w2_type" "$w2_status" "$w2_proto" "$w2_ip" "$w2_gw" "$w2_state" "$g2" "$w2_loss" "$w2_rtt")
+    wan1_obj=$(wan_json "$WAN1_PORT" "$w1_name" "$w1_type" "$w1_status" "$w1_proto" "$w1_ip" "$w1_gw" "$w1_state" "$g1" "$w1_loss" "$w1_rtt" "$lbl1")
+    wan2_obj=$(wan_json "$WAN2_PORT" "$w2_name" "$w2_type" "$w2_status" "$w2_proto" "$w2_ip" "$w2_gw" "$w2_state" "$g2" "$w2_loss" "$w2_rtt" "$lbl2")
 
     internet_obj='null'
     if [[ $DO_PINGS -eq 1 ]]; then
@@ -378,8 +388,8 @@ if [[ $JSON_MODE -eq 1 ]]; then
 fi
 
 # Pretty (human) output.
-show_wan "$WAN1_BLOCK" "WAN1" "$WAN1_GW"
-show_wan "$WAN2_BLOCK" "WAN2" "$WAN2_GW"
+show_wan "$WAN1_BLOCK" "WAN1" "$WAN1_GW" "$WAN1_ISP"
+show_wan "$WAN2_BLOCK" "WAN2" "$WAN2_GW" "$WAN2_ISP"
 
 echo -e "${BOLD}── ARP Table ─────────────────────────────────────${RESET}"
 grep -vE '^[[:space:]]*$' <<< "$ARP_BLOCK" | sed 's/^/  /'
@@ -389,8 +399,8 @@ echo -e "${BOLD}${CYAN}═══════════════════
 echo -e "${BOLD}  Summary${RESET}"
 echo -e "${BOLD}${CYAN}══════════════════════════════════════════════${RESET}"
 if [[ $DO_PINGS -eq 1 ]]; then
-    summarise_gw "$PRAW" "$g1" "WAN1 gw "
-    summarise_gw "$PRAW" "$g2" "WAN2 gw "
+    summarise_gw "$PRAW" "$g1" "${lbl1} gw "
+    summarise_gw "$PRAW" "$g2" "${lbl2} gw "
     ping_result "$(extract "$PRAW" "ping ${PING_PUBLIC}")" "Internet" "$PING_PUBLIC"
     echo ""
     echo -e "  ${CYAN}Note:${RESET} per-WAN lines ping each WAN's own gateway (true per-link health)."

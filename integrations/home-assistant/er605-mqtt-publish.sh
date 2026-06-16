@@ -39,9 +39,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 # ─── CONFIG ───────────────────────────────────────────────────
-# Router creds come from the repo-root .env (shared with er605-watch). We don't
-# need them here directly, but er605-watch reads that file itself; we just load
-# the MQTT settings. Inline env vars still win over the file (set before -u).
+# Router creds come from the repo-root .env (shared with er605-watch); er605-watch
+# reads that file itself. We source it too — only for the optional WANn_ISP labels
+# used to name the HA entities. (ROUTER_* leaking into our env is harmless.)
+# shellcheck disable=SC1091
+[[ -f "$REPO_ROOT/.env" ]] && source "$REPO_ROOT/.env"
+
+# Then the MQTT settings. Inline env vars still win over the file (set before -u).
 MQTT_ENV="${MQTT_ENV:-$HERE/er605-mqtt.env}"
 if [[ -f "$MQTT_ENV" ]]; then
     # shellcheck disable=SC1090
@@ -60,6 +64,12 @@ DISCOVERY_PREFIX="${DISCOVERY_PREFIX:-homeassistant}"
 EXPIRE_AFTER="${EXPIRE_AFTER:-180}"
 MQTT_TLS="${MQTT_TLS:-0}"
 MQTT_CAFILE="${MQTT_CAFILE:-}"
+
+# Per-WAN entity labels: "ISP (WANn)" if WANn_ISP is set in the root .env, else
+# "WANn". Only the friendly name changes — object_id/unique_id stay wan1/wan2 so
+# renaming an ISP relabels the entity in place (no duplicates, history kept).
+WAN1_LABEL="${WAN1_ISP:+${WAN1_ISP} (WAN1)}"; WAN1_LABEL="${WAN1_LABEL:-WAN1}"
+WAN2_LABEL="${WAN2_ISP:+${WAN2_ISP} (WAN2)}"; WAN2_LABEL="${WAN2_LABEL:-WAN2}"
 
 [[ -z "$MQTT_HOST" ]] && { echo "ERROR: MQTT_HOST not set (in $MQTT_ENV)." >&2; exit 4; }
 
@@ -129,11 +139,11 @@ publish_discovery() {
 
     # Per-WAN connectivity binary sensors. Booleans arrive as Python-rendered
     # "True"/"False" strings through the template, hence payload_on/off.
-    disc binary_sensor wan1 "$(jq -n '{
-        name:"WAN1", object_id:"er605_wan1", device_class:"connectivity",
+    disc binary_sensor wan1 "$(jq -n --arg name "$WAN1_LABEL" '{
+        name:$name, object_id:"er605_wan1", device_class:"connectivity",
         value_template:"{{ value_json.wans[0].up }}", payload_on:"True", payload_off:"False" }')"
-    disc binary_sensor wan2 "$(jq -n '{
-        name:"WAN2", object_id:"er605_wan2", device_class:"connectivity",
+    disc binary_sensor wan2 "$(jq -n --arg name "$WAN2_LABEL" '{
+        name:$name, object_id:"er605_wan2", device_class:"connectivity",
         value_template:"{{ value_json.wans[1].up }}", payload_on:"True", payload_off:"False" }')"
 
     # Both-WANs-down problem sensor (on when overall == down).
@@ -147,12 +157,12 @@ publish_discovery() {
         value_template:"{{ value_json.overall == '\''unreachable'\'' }}", payload_on:"True", payload_off:"False" }')"
 
     # RTT sensors — only meaningful in full mode; guard the null ping in fast.
-    disc sensor wan1_rtt "$(jq -n '{
-        name:"WAN1 RTT", object_id:"er605_wan1_rtt", unit_of_measurement:"ms",
+    disc sensor wan1_rtt "$(jq -n --arg name "$WAN1_LABEL RTT" '{
+        name:$name, object_id:"er605_wan1_rtt", unit_of_measurement:"ms",
         state_class:"measurement", icon:"mdi:speedometer",
         value_template:"{{ value_json.wans[0].ping.rtt_ms if value_json.wans[0].ping else none }}" }')"
-    disc sensor wan2_rtt "$(jq -n '{
-        name:"WAN2 RTT", object_id:"er605_wan2_rtt", unit_of_measurement:"ms",
+    disc sensor wan2_rtt "$(jq -n --arg name "$WAN2_LABEL RTT" '{
+        name:$name, object_id:"er605_wan2_rtt", unit_of_measurement:"ms",
         state_class:"measurement", icon:"mdi:speedometer",
         value_template:"{{ value_json.wans[1].ping.rtt_ms if value_json.wans[1].ping else none }}" }')"
     disc sensor internet_rtt "$(jq -n '{

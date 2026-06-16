@@ -109,6 +109,12 @@ All grouped under one **ER605 Router** device. Each has `expire_after` set
 (default 180s ≈ 3× the interval): if the publisher dies, the entities go
 **unavailable** instead of showing a stale `ok`.
 
+> **ISP labels:** set `WAN1_ISP` / `WAN2_ISP` in the root `.env` and the per-WAN
+> entities display as e.g. **"Airtel Fiber (WAN1)"** instead of "WAN1" (the status JSON
+> also gains an `isp` field). Only the friendly name changes — `object_id` stays
+> `er605_wan1`, so relabeling never duplicates entities or breaks history. After
+> editing `.env`, re-run `./er605-mqtt-publish.sh --discovery-only` to relabel.
+
 | Entity | Type | Meaning |
 |---|---|---|
 | `sensor.er605_overall` | sensor | `ok` / `degraded` / `down` / `unreachable`; full status JSON in attributes |
