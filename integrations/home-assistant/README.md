@@ -118,10 +118,10 @@ All grouped under one **ER605 Router** device. Each has `expire_after` set
 | Entity | Type | Meaning |
 |---|---|---|
 | `sensor.er605_overall` | sensor | `ok` / `degraded` / `down` / `unreachable`; full status JSON in attributes |
-| `binary_sensor.er605_wan1` | connectivity | WAN1 up/down |
-| `binary_sensor.er605_wan2` | connectivity | WAN2 up/down |
-| `binary_sensor.er605_both_down` | problem | both WANs down (internet out) |
-| `binary_sensor.er605_unreachable` | problem | router itself unreachable (power/box) |
+| `binary_sensor.er605_wan1` | connectivity | WAN1 up/down (named after `WAN1_ISP`) |
+| `binary_sensor.er605_wan2` | connectivity | WAN2 up/down (named after `WAN2_ISP`) |
+| `binary_sensor.er605_internet` | connectivity | **Internet** — Connected (overall `ok`/`degraded`) vs Disconnected (`down`/`unreachable`) |
+| `binary_sensor.er605_router` | connectivity | **Router** — Connected vs Disconnected (only when the router itself is unreachable) |
 | `sensor.er605_wan1_rtt` | sensor (ms) | WAN1 gateway RTT — **full mode only** |
 | `sensor.er605_wan2_rtt` | sensor (ms) | WAN2 gateway RTT — **full mode only** |
 | `sensor.er605_internet_rtt` | sensor (ms) | public-target RTT — **full mode only** |
@@ -142,11 +142,11 @@ Paste into **Settings → Automations → ⋮ → Edit in YAML**, fixing entity/
 names. The `for:` debounce avoids alerting on a momentary blip.
 
 ```yaml
-- alias: "ER605 both WANs down"
+- alias: "ER605 internet down"
   trigger:
     - platform: state
-      entity_id: binary_sensor.er605_both_down
-      to: "on"
+      entity_id: binary_sensor.er605_internet
+      to: "off"                       # off = Disconnected
       for: "00:01:00"
   action:
     - service: notify.mobile_app_yourphone
@@ -169,8 +169,8 @@ names. The `for:` debounce avoids alerting on a momentary blip.
 - alias: "ER605 router unreachable"
   trigger:
     - platform: state
-      entity_id: binary_sensor.er605_unreachable
-      to: "on"
+      entity_id: binary_sensor.er605_router
+      to: "off"                       # off = Disconnected (router itself)
       for: "00:02:00"
   action:
     - service: notify.mobile_app_yourphone

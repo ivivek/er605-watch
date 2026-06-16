@@ -132,6 +132,13 @@ disc() {
 }
 
 publish_discovery() {
+    # Remove entities that were renamed/replaced: publish an empty retained
+    # payload to their old config topics so HA deletes them (no orphans).
+    # Safe to repeat every run. (both_down/unreachable → internet/router.)
+    for old in binary_sensor/${MQTT_BASE}_both_down binary_sensor/${MQTT_BASE}_unreachable; do
+        pub "$DISCOVERY_PREFIX/$old/config" "" -r
+    done
+
     # Overall status sensor — carries the whole status JSON as attributes.
     disc sensor overall "$(jq -n --arg s "$STATUS_TOPIC" '{
         name:"Overall status", object_id:"er605_overall", icon:"mdi:router-network",
@@ -146,15 +153,19 @@ publish_discovery() {
         name:$name, object_id:"er605_wan2", device_class:"connectivity",
         value_template:"{{ value_json.wans[1].up }}", payload_on:"True", payload_off:"False" }')"
 
-    # Both-WANs-down problem sensor (on when overall == down).
-    disc binary_sensor both_down "$(jq -n '{
-        name:"Both WANs down", object_id:"er605_both_down", device_class:"problem",
-        value_template:"{{ value_json.overall == '\''down'\'' }}", payload_on:"True", payload_off:"False" }')"
+    # Internet reachability (connectivity): Connected when overall is ok/degraded,
+    # Disconnected when down or unreachable. Reads naturally — no OK/Problem.
+    disc binary_sensor internet "$(jq -n \
+        --arg vt "{{ value_json.overall in ['ok','degraded'] }}" '{
+        name:"Internet", object_id:"er605_internet", device_class:"connectivity",
+        value_template:$vt, payload_on:"True", payload_off:"False" }')"
 
-    # Router-unreachable problem sensor (router/power vs WAN distinction).
-    disc binary_sensor unreachable "$(jq -n '{
-        name:"Router unreachable", object_id:"er605_unreachable", device_class:"problem",
-        value_template:"{{ value_json.overall == '\''unreachable'\'' }}", payload_on:"True", payload_off:"False" }')"
+    # Router reachability (connectivity): Disconnected only when the router itself
+    # is unreachable (power/box) — distinct from a WAN outage.
+    disc binary_sensor router "$(jq -n \
+        --arg vt "{{ value_json.overall != 'unreachable' }}" '{
+        name:"Router", object_id:"er605_router", device_class:"connectivity",
+        value_template:$vt, payload_on:"True", payload_off:"False" }')"
 
     # RTT sensors — only meaningful in full mode; guard the null ping in fast.
     disc sensor wan1_rtt "$(jq -n --arg name "$WAN1_LABEL RTT" '{
