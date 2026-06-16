@@ -12,8 +12,11 @@ firmware 2.3.0**; parsing is matched to that firmware's exact text output.
 ## Scripts
 
 - **`er605-watch`** — the main tool (the repo's command). Reports per-WAN
-  status/IP/gateway/DNS and pings each WAN's gateway + a public IP. `--trace`/`-t`
-  adds a (slow) traceroute.
+  status/IP/gateway/DNS and pings each WAN's gateway + a public IP. Flags:
+  `--trace`/`-t` (slow traceroute), `--fast`/`-f` (skip pings → link status only,
+  ~3s), `--json`/`-j` (emit JSON on stdout, progress→stderr; needs `jq`).
+  **Exit codes:** `0` all up · `1` one down · `2` both down · `3` router unreachable
+  · `4` usage/config. These are an API — keep them stable for cron/alert consumers.
 - **`probe_cli.sh`** — dev tool. Dumps the *raw* output of arbitrary CLI commands
   using the older `sleep`-paced driver (+`sshpass`). Use it to discover the command
   grammar / output format on a new firmware before touching parsers.
@@ -73,6 +76,12 @@ Everything here exists to work around this device. Do not "simplify" these away:
 - **One vs two SSH logins:** if `WAN1_GW`/`WAN2_GW` are set, shows + pings run in one
   login; left blank (the default), gateways are auto-discovered from `show interface
   switchport`, costing a second login. Either way it warns on live-vs-config drift.
+- **MAIN is gather → derive → render.** It collects raw output, parses WAN fields
+  (`read_wan`, tab-delimited), derives per-WAN/internet state (`ping_state`) and the
+  `OVERALL`/`EXIT` status, *then* renders **either** pretty (stdout) **or** JSON
+  (built with `jq`, never string-concatenated). All progress goes through
+  `progress()` → stderr so `--json` stdout stays pure. Add new data once in the
+  gather/derive step; surface it in both renderers.
 
 ## Conventions
 

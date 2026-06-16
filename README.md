@@ -114,8 +114,24 @@ interactive terminal session** — not a clean request/response API. The scripts
 ./er605-watch                                  # all from .env  (~13s)
 ./er605-watch '<router-password>'              # password as arg, rest from .env
 ./er605-watch --host <ip> '<router-password>'  # override the router IP
+./er605-watch --fast                           # link status only, skip pings (~3s)
+./er605-watch --json | jq .                    # machine-readable output (needs jq)
 ./er605-watch --trace                          # also run a traceroute (slow)
 ```
+
+**Flags:** `--fast`/`-f` (skip all pings/traceroute — instant link-status check, good
+for frequent polling), `--json`/`-j` (emit one JSON object on stdout, progress on
+stderr), `--trace`/`-t`, `--host`/`-H <ip>`.
+
+**Exit codes** (for cron/alerting): `0` all WANs up · `1` one WAN down · `2` both
+WANs down · `3` router unreachable · `4` usage/config error. So a "both WANs down"
+alert is just `er605-watch --fast >/dev/null 2>&1 || [ $? -eq 2 ] && notify…`.
+
+**JSON shape** (`--json`): `{timestamp, router, mode, overall, wans:[{port,name,type,
+status,proto,ip,gateway,up,ping:{target,loss_pct,rtt_ms,state,online}}], internet,
+arp:[{interface,ip,mac,type}], traceroute}`. In `--fast` mode `ping`/`internet` are
+`null` and `up` comes from the switchport link status. This feeds a status-bar
+module, a tray app, Home Assistant, Prometheus, etc.
 
 What it does (`expect`-driven — waits on the `#` prompt, no blind sleeps; one SSH
 login if `WAN*_GW` are set, otherwise two — see the gateway note below):
@@ -184,6 +200,7 @@ ROUTER_IP=... RPASS='<router-password>' ./debug_expect.sh   # or set them in .en
 
 - `bash`
 - `expect` — `sudo apt-get install expect` (drives the interactive CLI; `er605-watch` types the password itself, so `sshpass` is **not** required)
+- `jq` — `sudo apt-get install jq` (only for `--json`)
 - `ssh` (OpenSSH client)
 - SSH enabled on the router (Omada: enable CLI/SSH access)
 

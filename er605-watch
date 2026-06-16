@@ -5,11 +5,15 @@
 #
 # Config precedence (highest first): CLI flag > inline env var > env file.
 #   Env file : .env next to this script (git-ignored). See .env.example.
-# Usage: ./er605-watch [--trace]               # all from .env
-#        ./er605-watch <password> [--trace]
-#        ./er605-watch --host <ip> <password> [--trace]
+# Usage: ./er605-watch [--trace] [--fast] [--json]
+#        ./er605-watch <password> [flags]
+#        ./er605-watch --host <ip> <password> [flags]
 #        ROUTER_IP=... ROUTER_PASS=... ./er605-watch
-#   --trace / -t : also run a traceroute to the public target (slower)
+#   --trace / -t : also run a traceroute to the public target (slow)
+#   --fast / -f  : link status only, skip pings/traceroute (~3s, no connectivity)
+#   --json / -j  : emit a JSON object on stdout (needs jq); progress -> stderr
+# Exit codes: 0 all WANs up · 1 one down · 2 both down · 3 router unreachable
+#             · 4 usage/config error
 # =============================================================
 
 # ─── CONFIG ───────────────────────────────────────────────────
@@ -43,13 +47,15 @@ WAN2_GW="${WAN2_GW:-}"
 # Public IP to test overall internet reachability (follows the active route)
 PING_PUBLIC="${PING_PUBLIC:-8.8.8.8}"
 
-# CLI args (override everything): [--host <ip>] [--trace] [<password>].
+# CLI args (override everything): [--host <ip>] [--trace] [--fast] [--json] [<password>].
 # Traceroute follows the active route only, so it traces whichever WAN carries it.
-DO_TRACE="${DO_TRACE:-0}"
+DO_TRACE="${DO_TRACE:-0}"; FAST_MODE="${FAST:-0}"; JSON_MODE="${JSON:-0}"
 PASS_ARG=""; HOST_ARG=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --trace|-t) DO_TRACE=1; shift ;;
+        --fast|-f)  FAST_MODE=1; shift ;;
+        --json|-j)  JSON_MODE=1; shift ;;
         --host|-H)  HOST_ARG="$2"; shift 2 ;;
         *)          PASS_ARG="$1"; shift ;;
     esac
@@ -57,13 +63,17 @@ done
 [[ -n "$HOST_ARG" ]] && ROUTER_IP="$HOST_ARG"
 [[ -n "$PASS_ARG" ]] && ROUTER_PASS="$PASS_ARG"
 
+# Fast mode skips all connectivity tests (and therefore traceroute).
+DO_PINGS=1
+[[ $FAST_MODE -eq 1 ]] && { DO_PINGS=0; DO_TRACE=0; }
+
 if [[ -z "$ROUTER_IP" ]]; then
     echo "ERROR: no router IP. Set ROUTER_IP in $CONFIG_FILE, pass --host <ip>, or export ROUTER_IP." >&2
-    exit 1
+    exit 4
 fi
 if [[ -z "$ROUTER_PASS" ]]; then
     echo "ERROR: no password. Set ROUTER_PASS in $CONFIG_FILE, pass it as an arg, or export ROUTER_PASS." >&2
-    exit 1
+    exit 4
 fi
 
 # ─── COLORS ───────────────────────────────────────────────────
@@ -77,8 +87,15 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 # runs Dropbear (legacy ssh-rsa host key), so we re-enable that algorithm.
 if ! command -v expect &>/dev/null; then
     echo "ERROR: expect not found. Install it: sudo apt-get install expect" >&2
-    exit 1
+    exit 4
 fi
+if [[ $JSON_MODE -eq 1 ]] && ! command -v jq &>/dev/null; then
+    echo "ERROR: --json needs jq. Install it: sudo apt-get install jq" >&2
+    exit 4
+fi
+
+# Progress goes to stderr so stdout stays clean (pure JSON in --json mode).
+progress() { echo -e "$@" >&2; }
 
 # run_cli "cmd" "cmd" ...
 # Runs each command in privileged mode and returns the raw session output.
@@ -208,11 +225,38 @@ summarise_gw() {
     fi
 }
 
-# ─── MAIN ─────────────────────────────────────────────────────
-print_header
+# Classify a ping's packet-loss into online / degraded / offline.
+ping_state() {
+    local loss="$1"
+    if   [[ -z "$loss" ]];                  then echo offline
+    elif [[ "$loss" -ge 100 ]] 2>/dev/null; then echo offline
+    elif [[ "$loss" -gt 0   ]] 2>/dev/null; then echo degraded
+    else echo online
+    fi
+}
+# Emit a value as a JSON number, or `null` if empty (for jq --argjson).
+jnum() { [[ -n "$1" ]] && printf '%s' "$1" || printf 'null'; }
 
-# Discover mode kicks in only if a WAN gateway is left blank in config. With
-# both gateways set, everything runs in a SINGLE SSH login (shows + pings).
+# Build one WAN's JSON object. Args: port name type status proto ip live_gw
+#                                     state ping_target loss rtt
+wan_json() {
+    local ping='null'
+    if [[ $DO_PINGS -eq 1 ]]; then
+        ping=$(jq -n --arg t "$9" --argjson loss "$(jnum "${10}")" \
+                     --argjson rtt "$(jnum "${11}")" --arg st "$8" \
+            '{target:$t, loss_pct:$loss, rtt_ms:$rtt, state:$st, online:($st!="offline")}')
+    fi
+    jq -n --argjson port "$1" --arg name "$2" --arg type "$3" --arg status "$4" \
+          --arg proto "$5" --arg ip "$6" --arg gw "$7" --arg st "$8" --argjson ping "$ping" \
+        '{port:$port, name:$name, type:$type, status:$status, proto:$proto,
+          ip:$ip, gateway:$gw, up:($st!="offline"), ping:$ping}'
+}
+
+# ─── MAIN ─────────────────────────────────────────────────────
+[[ $JSON_MODE -eq 0 ]] && print_header
+
+# Discover mode: a WAN gateway left blank → learn it from the switchport output
+# (costs a 2nd login). Both set → fold pings into the first login.
 DISCOVER=0
 [[ -z "$WAN1_GW" || -z "$WAN2_GW" ]] && DISCOVER=1
 
@@ -221,39 +265,50 @@ CMDS=(
     "show interface switchport ${WAN2_PORT}"
     "show arp"
 )
-if [[ $DISCOVER -eq 0 ]]; then
+if [[ $DO_PINGS -eq 1 && $DISCOVER -eq 0 ]]; then
     [[ "$WAN1_GW" != "0.0.0.0" ]] && CMDS+=("ping ${WAN1_GW}")
     [[ "$WAN2_GW" != "0.0.0.0" ]] && CMDS+=("ping ${WAN2_GW}")
     CMDS+=("ping ${PING_PUBLIC}")
     [[ $DO_TRACE -eq 1 ]] && CMDS+=("tracert ${PING_PUBLIC}")
 fi
 
-echo -e "${YELLOW}► Querying router...${RESET}\n"
+progress "${YELLOW}► Querying router...${RESET}"
 RAW=$(run_cli "${CMDS[@]}")
 
 if ! grep -q '#' <<< "$RAW"; then
-    echo -e "${RED}✗ Could not get a CLI prompt. Check IP, password, and SSH access.${RESET}"
-    exit 1
+    if [[ $JSON_MODE -eq 1 ]]; then
+        jq -n --arg router "$ROUTER_IP" \
+            '{router:$router, overall:"unreachable",
+              error:"could not get a CLI prompt — check IP, password, SSH access"}'
+    else
+        echo -e "${RED}✗ Could not get a CLI prompt. Check IP, password, and SSH access.${RESET}"
+    fi
+    exit 3
 fi
 
 WAN1_BLOCK=$(extract "$RAW" "show interface switchport ${WAN1_PORT}")
 WAN2_BLOCK=$(extract "$RAW" "show interface switchport ${WAN2_PORT}")
 ARP_BLOCK=$(extract "$RAW" "show arp")
 
-show_wan "$WAN1_BLOCK" "WAN1" "$WAN1_GW"
-show_wan "$WAN2_BLOCK" "WAN2" "$WAN2_GW"
+# Parse each WAN's fields (tab-delimited; CLI fields never contain tabs).
+read_wan() {
+    local b="$1"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+        "$(get_field "$b" "Port name")"  "$(get_field "$b" "Vlan type")" \
+        "$(get_field "$b" "Routing Interface Status")" "$(get_field "$b" "Proto")" \
+        "$(get_field "$b" "Primary IP")" "$(get_field "$b" "Default Gateway")" \
+        "$(get_field "$b" "Primary DNS")"
+}
+IFS=$'\t' read -r w1_name w1_type w1_status w1_proto w1_ip w1_gw w1_dns < <(read_wan "$WAN1_BLOCK")
+IFS=$'\t' read -r w2_name w2_type w2_status w2_proto w2_ip w2_gw w2_dns < <(read_wan "$WAN2_BLOCK")
 
-echo -e "${BOLD}── ARP Table ─────────────────────────────────────${RESET}"
-grep -vE '^[[:space:]]*$' <<< "$ARP_BLOCK" | sed 's/^/  /'
-echo ""
+# Gateway to test = configured value if set, else the live one from switchport.
+g1="${WAN1_GW:-$w1_gw}"; g2="${WAN2_GW:-$w2_gw}"
 
-# Effective gateways + ping output. Hardcoded → pings already in RAW. Discover
-# → read live gateways and run a 2nd session to ping them.
-g1="$WAN1_GW"; g2="$WAN2_GW"; PRAW="$RAW"
-if [[ $DISCOVER -eq 1 ]]; then
-    g1=$(wan_gateway "$WAN1_BLOCK")
-    g2=$(wan_gateway "$WAN2_BLOCK")
-    echo -e "${YELLOW}► Testing connectivity (discovered gateways)...${RESET}\n"
+# Connectivity tests (skipped in --fast). Run a 2nd login if not already done.
+PRAW="$RAW"
+if [[ $DO_PINGS -eq 1 && $DISCOVER -eq 1 ]]; then
+    progress "${YELLOW}► Testing connectivity...${RESET}"
     PING_CMDS=()
     [[ -n "$g1" && "$g1" != "0.0.0.0" ]] && PING_CMDS+=("ping ${g1}")
     [[ -n "$g2" && "$g2" != "0.0.0.0" ]] && PING_CMDS+=("ping ${g2}")
@@ -262,22 +317,98 @@ if [[ $DISCOVER -eq 1 ]]; then
     PRAW=$(run_cli "${PING_CMDS[@]}")
 fi
 
+# Derive per-WAN + internet state.
+if [[ $DO_PINGS -eq 1 ]]; then
+    w1_loss=$(parse_loss "$(extract "$PRAW" "ping ${g1}")");          w1_rtt=$(parse_rtt "$(extract "$PRAW" "ping ${g1}")")
+    w2_loss=$(parse_loss "$(extract "$PRAW" "ping ${g2}")");          w2_rtt=$(parse_rtt "$(extract "$PRAW" "ping ${g2}")")
+    inet_loss=$(parse_loss "$(extract "$PRAW" "ping ${PING_PUBLIC}")"); inet_rtt=$(parse_rtt "$(extract "$PRAW" "ping ${PING_PUBLIC}")")
+    w1_state=$(ping_state "$w1_loss"); w2_state=$(ping_state "$w2_loss"); inet_state=$(ping_state "$inet_loss")
+else
+    # Fast mode: liveness from the switchport "Routing Interface Status".
+    [[ "${w1_status^^}" == "UP" ]] && w1_state=online || w1_state=offline
+    [[ "${w2_status^^}" == "UP" ]] && w2_state=online || w2_state=offline
+    inet_state="skipped"
+fi
+
+# Overall + exit code, keyed on how many WANs are offline.
+offline=0
+[[ "$w1_state" == "offline" ]] && offline=$((offline+1))
+[[ "$w2_state" == "offline" ]] && offline=$((offline+1))
+if   [[ $offline -ge 2 ]]; then OVERALL=down;     EXIT=2
+elif [[ $offline -eq 1 ]]; then OVERALL=degraded; EXIT=1
+elif [[ "$w1_state" == "degraded" || "$w2_state" == "degraded" ]]; then OVERALL=degraded; EXIT=0
+else OVERALL=ok; EXIT=0
+fi
+
+TRACE_BLOCK=""
+[[ $DO_TRACE -eq 1 ]] && TRACE_BLOCK=$(extract "$PRAW" "tracert ${PING_PUBLIC}")
+
+# ─── RENDER ───────────────────────────────────────────────────
+if [[ $JSON_MODE -eq 1 ]]; then
+    wan1_obj=$(wan_json "$WAN1_PORT" "$w1_name" "$w1_type" "$w1_status" "$w1_proto" "$w1_ip" "$w1_gw" "$w1_state" "$g1" "$w1_loss" "$w1_rtt")
+    wan2_obj=$(wan_json "$WAN2_PORT" "$w2_name" "$w2_type" "$w2_status" "$w2_proto" "$w2_ip" "$w2_gw" "$w2_state" "$g2" "$w2_loss" "$w2_rtt")
+
+    internet_obj='null'
+    if [[ $DO_PINGS -eq 1 ]]; then
+        internet_obj=$(jq -n --arg t "$PING_PUBLIC" --argjson loss "$(jnum "$inet_loss")" \
+            --argjson rtt "$(jnum "$inet_rtt")" --arg st "$inet_state" \
+            '{target:$t, loss_pct:$loss, rtt_ms:$rtt, state:$st, online:($st!="offline")}')
+    fi
+
+    arp_json=$(grep -vE '^[[:space:]]*$|^-+$|MACAdress' <<< "$ARP_BLOCK" \
+        | awk 'NF>=4 && $2 ~ /[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/ {print $1"\t"$2"\t"$3"\t"$4}' \
+        | jq -R 'split("\t") | {interface:.[0], ip:.[1], mac:.[2], type:.[3]}' | jq -s .)
+    [[ -z "$arp_json" ]] && arp_json='[]'
+
+    trace_json='null'
+    if [[ $DO_TRACE -eq 1 ]]; then
+        trace_json=$(grep -vE '^[[:space:]]*$' <<< "$TRACE_BLOCK" | jq -R . | jq -s .)
+        [[ -z "$trace_json" ]] && trace_json='[]'
+    fi
+
+    jq -n \
+        --arg ts "$(date -Is)" --arg router "$ROUTER_IP" \
+        --arg mode "$([[ $DO_PINGS -eq 1 ]] && echo full || echo fast)" \
+        --argjson wan1 "$wan1_obj" --argjson wan2 "$wan2_obj" \
+        --argjson internet "$internet_obj" --arg overall "$OVERALL" \
+        --argjson arp "$arp_json" --argjson traceroute "$trace_json" \
+        '{timestamp:$ts, router:$router, mode:$mode, overall:$overall,
+          wans:[$wan1,$wan2], internet:$internet, arp:$arp, traceroute:$traceroute}'
+    exit $EXIT
+fi
+
+# Pretty (human) output.
+show_wan "$WAN1_BLOCK" "WAN1" "$WAN1_GW"
+show_wan "$WAN2_BLOCK" "WAN2" "$WAN2_GW"
+
+echo -e "${BOLD}── ARP Table ─────────────────────────────────────${RESET}"
+grep -vE '^[[:space:]]*$' <<< "$ARP_BLOCK" | sed 's/^/  /'
+echo ""
+
 echo -e "${BOLD}${CYAN}══════════════════════════════════════════════${RESET}"
 echo -e "${BOLD}  Summary${RESET}"
 echo -e "${BOLD}${CYAN}══════════════════════════════════════════════${RESET}"
-
-summarise_gw "$PRAW" "$g1" "WAN1 gw "
-summarise_gw "$PRAW" "$g2" "WAN2 gw "
-ping_result "$(extract "$PRAW" "ping ${PING_PUBLIC}")" "Internet" "$PING_PUBLIC"
-
+if [[ $DO_PINGS -eq 1 ]]; then
+    summarise_gw "$PRAW" "$g1" "WAN1 gw "
+    summarise_gw "$PRAW" "$g2" "WAN2 gw "
+    ping_result "$(extract "$PRAW" "ping ${PING_PUBLIC}")" "Internet" "$PING_PUBLIC"
+    echo ""
+    echo -e "  ${CYAN}Note:${RESET} per-WAN lines ping each WAN's own gateway (true per-link health)."
+    echo -e "        The Internet line follows the router's active route (load-balance/failover)."
+else
+    echo -e "  ${YELLOW}fast mode${RESET} — link status only, connectivity tests skipped."
+fi
+case "$OVERALL" in
+    ok)       OC=$GREEN ;;
+    degraded) OC=$YELLOW ;;
+    *)        OC=$RED ;;
+esac
 echo ""
-echo -e "  ${CYAN}Note:${RESET} per-WAN lines ping each WAN's own gateway (true per-link health)."
-echo -e "        The Internet line follows the router's active route (load-balance/failover)."
+echo -e "  Overall : ${OC}${OVERALL^^}${RESET}  (exit $EXIT)"
 echo ""
 
 # ─── Traceroute (opt-in) ──────────────────────────────────────
 if [[ $DO_TRACE -eq 1 ]]; then
-    TRACE_BLOCK=$(extract "$PRAW" "tracert ${PING_PUBLIC}")
     echo -e "${BOLD}── Traceroute → ${PING_PUBLIC} ──────────────────────${RESET}"
     if [[ -n "$TRACE_BLOCK" ]]; then
         grep -vE '^[[:space:]]*$' <<< "$TRACE_BLOCK" | sed 's/^/  /'
@@ -287,3 +418,5 @@ if [[ $DO_TRACE -eq 1 ]]; then
     fi
     echo ""
 fi
+
+exit $EXIT
