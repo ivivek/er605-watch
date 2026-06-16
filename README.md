@@ -7,6 +7,44 @@ Tested on **ER605 v2.0, firmware 2.3.0 Build 20250428**.
 
 ---
 
+## Configuration
+
+Config comes from three sources, **highest precedence first**:
+
+1. **CLI flags / positional args** — `--host <ip>`, `<password>`, `--trace`
+2. **Inline environment variables** — `ROUTER_IP=… ROUTER_PASS=… ./check_wan.sh`
+3. **`.env` file** next to the scripts — git-ignored, holds your site-specific values
+
+No router IP or password is stored in the repo. Set up your local `.env` once:
+
+```bash
+cp .env.example .env
+chmod 600 .env            # keep the password readable only by you
+# edit .env: set ROUTER_IP and ROUTER_PASS (and optionally WAN1_GW/WAN2_GW, etc.)
+```
+
+`.env` (note: `.env.example` is the committed template; `.env` itself is
+git-ignored — an *exact* match in `.gitignore`, not `.env*`, so the example stays
+tracked):
+
+```sh
+ROUTER_IP=192.168.0.1
+ROUTER_PASS=yourpassword
+# optional: ROUTER_USER, ROUTER_PORT, WAN1_PORT, WAN2_PORT, PING_PUBLIC, WAN1_GW, WAN2_GW
+```
+
+With `.env` in place you can just run `./check_wan.sh`. Override ad-hoc without
+touching the file:
+
+```bash
+./check_wan.sh --host 10.0.0.1 'pass'      # different router, this run only
+ROUTER_IP=10.0.0.1 ./check_wan.sh          # via env var
+```
+
+The same `.env` is shared by `probe_cli.sh` and `debug_expect.sh`.
+
+---
+
 ## Why this is harder than it looks — the ER605 CLI limitations
 
 The ER605 does **not** expose a normal Linux/SSH environment. Its SSH service is
@@ -37,13 +75,14 @@ interactive terminal session** — not a clean request/response API. The scripts
 ### `check_wan.sh` — the dual-WAN status report
 
 ```bash
-./check_wan.sh '<router-password>'              # ~13s
-./check_wan.sh '<router-password>' --trace      # also run a traceroute (slow)
-# or
-ROUTER_PASS='<router-password>' ./check_wan.sh
+./check_wan.sh                                  # all from .env  (~13s)
+./check_wan.sh '<router-password>'              # password as arg, rest from .env
+./check_wan.sh --host <ip> '<router-password>'  # override the router IP
+./check_wan.sh --trace                          # also run a traceroute (slow)
 ```
 
-What it does — all in **one SSH login** (`expect`-driven, waits on the `#` prompt):
+What it does (`expect`-driven — waits on the `#` prompt, no blind sleeps; one SSH
+login if `WAN*_GW` are set, otherwise two — see the gateway note below):
 
 1. **Connects** with the host-key workaround + PTY, types the password, and runs
    `enable` to reach privileged mode.
@@ -63,14 +102,16 @@ What it does — all in **one SSH login** (`expect`-driven, waits on the `#` pro
    (`* * *`) hop, so a single trace can take ~30–60s. Hop 1 reveals which WAN
    the active route used.
 
-Configurable at the top of the script: `ROUTER_IP`, `ROUTER_USER`, `ROUTER_PORT`,
-`WAN1_PORT`, `WAN2_PORT`, `PING_PUBLIC`, and `WAN1_GW` / `WAN2_GW`.
+Configurable via `.env` / env vars (see [Configuration](#configuration)):
+`ROUTER_IP`, `ROUTER_USER`, `ROUTER_PORT`, `WAN1_PORT`, `WAN2_PORT`, `PING_PUBLIC`,
+and `WAN1_GW` / `WAN2_GW`.
 
-**On the gateways (speed vs. dynamic):** `WAN1_GW` / `WAN2_GW` are hardcoded (to
-your discovered values) so the whole check runs in a **single** SSH login. The
-script still reads the *live* gateway from `show interface switchport` and prints
-a `⚠ configured ≠ live` warning if your ISP changes one. Leave either gateway
-**blank** to auto-discover it instead — at the cost of a second SSH login.
+**On the gateways (dynamic vs. speed):** by default `WAN1_GW` / `WAN2_GW` are
+**blank**, so the script auto-discovers each WAN's gateway live from
+`show interface switchport` — nothing site-specific is needed, at the cost of a
+second SSH login. **Optionally** set both (in `.env`) to your real gateways to run
+everything in a **single** login (~1s faster); the script then still reads the
+*live* gateway and prints a `⚠ configured ≠ live` warning if your ISP changes one.
 
 ### `probe_cli.sh` — the CLI discovery / debug tool
 
@@ -79,6 +120,7 @@ and dumps the **raw** output of whatever commands you pass, so you can inspect t
 real text format before writing parsers.
 
 ```bash
+# reads ROUTER_IP from .env; password via RPASS (or ROUTER_PASS in .env)
 export RPASS='<router-password>'
 ./probe_cli.sh                                   # runs a default set of show commands
 ./probe_cli.sh "show arp" "show system-info"     # probe specific commands
@@ -101,7 +143,8 @@ DELAY=12 ./probe_cli.sh "ping 8.8.8.8"           # bump per-command wait for slo
 ## Notes & caveats
 
 - **Password handling.** Passing the password as a CLI argument leaves it in your
-  shell history and process list. Prefer the `ROUTER_PASS` environment variable.
+  shell history and process list (`ps`). Prefer putting `ROUTER_PASS` in a
+  `chmod 600` `.env` file, or an inline `ROUTER_PASS=… ` env var.
 - **Speed.** A full run takes ~14s. Because `check_wan.sh` waits on the `#` prompt
   (via `expect`) instead of fixed `sleep`s, the time is essentially just the SSH
   logins plus the actual `ping` durations — there is no wasted blind waiting.
