@@ -1,3 +1,7 @@
 # Local, site-specific config — never commit (holds router IP / password).
 # Exact match, NOT .env* — we want .env.example to stay tracked.
 .env
+
+# HA integration's MQTT publisher config (holds broker creds). Same rule: the
+# .example stays tracked, the real file does not.
+integrations/home-assistant/er605-mqtt.env

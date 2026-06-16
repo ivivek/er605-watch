@@ -1,0 +1,14 @@
+[Unit]
+Description=Publish ER605 WAN status to MQTT (Home Assistant)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Edit this path to where you cloned the repo, and set the user that owns it
+# (so it can read the git-ignored .env / er605-mqtt.env).
+ExecStart=/opt/er605/integrations/home-assistant/er605-mqtt-publish.sh
+User=er605
+# Don't let a down WAN (exit 1/2) or unreachable router (exit 3) flap the timer;
+# we publish the status either way. SuccessExitStatus keeps the journal clean.
+SuccessExitStatus=0 1 2 3

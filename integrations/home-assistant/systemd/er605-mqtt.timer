@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the ER605 MQTT publisher periodically
+
+[Timer]
+# First run 30s after boot, then every 60s. --fast takes ~3s, so 60s is safe.
+OnBootSec=30
+OnUnitActiveSec=60
+# Don't pile up runs if one is slow (e.g. a stalled SSH); skip instead.
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
