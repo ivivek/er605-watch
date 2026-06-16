@@ -1,7 +1,8 @@
 # ER605 Dual-WAN Connectivity Checker
 
-A pair of Bash scripts that log into a **TP-Link Omada ER605** router over SSH and
-report the live status of both WAN links plus their connectivity.
+Bash scripts that log into a **TP-Link Omada ER605** router over SSH and report
+the live status of both WAN links plus their connectivity — one checker plus two
+CLI-wrangling dev tools.
 
 Tested on **ER605 v2.0, firmware 2.3.0 Build 20250428**.
 
@@ -160,6 +161,21 @@ export RPASS='<router-password>'
 ./probe_cli.sh                                   # runs a default set of show commands
 ./probe_cli.sh "show arp" "show system-info"     # probe specific commands
 DELAY=12 ./probe_cli.sh "ping 8.8.8.8"           # bump per-command wait for slow commands
+```
+
+> `probe_cli.sh` uses the older `sleep`-paced driver (and `sshpass`) — it predates
+> the `expect` rewrite, which is fine for a discovery tool where you read the raw
+> dump anyway.
+
+### `debug_expect.sh` — per-step timing probe
+
+Diagnostic for the `expect` driver: runs a full session (login → `enable` →
+a couple of `show`s → a ping → logout) and prints the **milliseconds spent on each
+step**, so you can spot which `expect` is stalling. This is the tool that pinned
+the ~30s-per-session `expect eof` stall down to the logout step.
+
+```bash
+ROUTER_IP=... RPASS='<router-password>' ./debug_expect.sh   # or set them in .env
 ```
 
 ---
