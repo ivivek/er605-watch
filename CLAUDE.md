@@ -85,10 +85,17 @@ Everything here exists to work around this device. Do not "simplify" these away:
 
 ## Conventions
 
-- **No site-specific values in tracked files.** Router IP/password/gateways live only
-  in `.env` (git-ignored — note `.gitignore` matches `.env` exactly, not `.env*`, so
-  `.env.example` stays tracked). The history was deliberately rebuilt to be IP-free;
-  keep it that way.
+- **No site-specific values in tracked files — IPs, passwords, gateways, MACs, real
+  usernames, or hostnames.** This is a hard rule for *every* file in the repo, including
+  the `integrations/` tree, docs, and code comments. Real values live only in git-ignored
+  env files: router creds in repo-root `.env`; the HA integration's broker creds in
+  `integrations/home-assistant/er605-mqtt.env` (both git-ignored — `.gitignore` matches
+  `.env` exactly so `.env.example` stays tracked, and lists `er605-mqtt.env` explicitly).
+  Tracked files carry only placeholders (`changeme`, `192.168.0.10`, `<PI_IP>`,
+  `<user>`/`<pass>`). The history was deliberately rebuilt to be IP-free; keep it that way.
+  **Before any commit, grep the staged diff for real IPs/passwords/MACs/`user@host`** and
+  confirm only placeholders remain. (A generic project-name label like `er605` used as an
+  example username is fine; a real account/host is not.)
 - Commits are authored as `Vivek K <vivek.oss@linetra.com>` (the `ivivek` GitHub
   account). Remote `origin` pushes over **HTTPS** as `ivivek`; the local SSH key
   authenticates as a *different* account, so SSH push won't work for this repo.
