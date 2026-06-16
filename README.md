@@ -196,6 +196,26 @@ ROUTER_IP=... RPASS='<router-password>' ./debug_expect.sh   # or set them in .en
 
 ---
 
+## Integrations
+
+Optional front-ends that surface `er605-watch`'s status elsewhere. Each is
+self-contained with its own README; both consume the `--json` output (the
+contract documented under [`er605-watch`](#er605-watch--the-dual-wan-status-report)).
+
+- **[`integrations/home-assistant/`](integrations/home-assistant/)** — push
+  dual-WAN status to **Home Assistant** over MQTT for phone alerts, dashboards,
+  history, and automations. A publisher box runs `er605-watch --json` on a timer
+  and publishes to a Mosquitto broker; HA auto-creates entities via MQTT
+  Discovery. Router credentials stay on the publisher box.
+- **[`integrations/ubuntu-panel/`](integrations/ubuntu-panel/)** — a **GNOME
+  top-panel** tray indicator: a colored dot (🟢/🟡/🔴/⚫) with per-WAN details in
+  the dropdown. Runs `er605-watch` directly on your desktop (no broker needed).
+
+> Per-WAN ISP labels: set `WAN1_ISP` / `WAN2_ISP` in `.env` and both integrations
+> (and the CLI) show e.g. "Airtel Fiber (WAN1)" in place of "WAN1".
+
+---
+
 ## Requirements
 
 - `bash`
