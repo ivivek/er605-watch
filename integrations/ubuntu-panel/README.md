@@ -3,8 +3,9 @@
 A small **AppIndicator** tray icon that shows ER605 dual-WAN status in the GNOME
 top panel: a custom transmit/receive glyph **tinted by state** (green ok · amber
 degraded · red down · grey unreachable, from `icons/`), a hover tooltip with a
-one-line summary, and a polished dropdown — a colored status dot per WAN next to
-the **ISP name** and state, with IP / gateway / ping-RTT on a dim second line.
+one-line summary, and a plain-text dropdown listing each WAN by **ISP name** with
+its state (UP/DOWN) and IP / gateway / ping-RTT. Colour lives in the panel icon;
+the menu is kept clean text.
 
 Unlike the [Home Assistant integration](../home-assistant/), this runs
 **`er605-watch` directly** on your desktop — no broker needed. Router

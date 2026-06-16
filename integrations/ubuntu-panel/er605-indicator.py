@@ -35,11 +35,11 @@ WATCH = os.environ.get("ER605_WATCH", os.path.realpath(os.path.join(HERE, "..", 
 INTERVAL = max(15, int(os.environ.get("ER605_PANEL_INTERVAL", "60")))
 
 # overall state -> panel icon name (file icons/<name>.svg) + menu dot.
+# Panel icon per overall state (file icons/<name>.svg). The dropdown itself is
+# plain text — colour lives only in the panel icon.
 STATE_ICON = {"ok": "er605-ok", "degraded": "er605-degraded",
               "down": "er605-down", "unreachable": "er605-unreachable",
               "unknown": "er605-unreachable"}
-STATE_DOT = {"ok": "dot-green", "degraded": "dot-amber",
-             "down": "dot-red", "unreachable": "dot-grey", "unknown": "dot-grey"}
 
 
 def esc(s):
@@ -95,16 +95,6 @@ class ER605Indicator:
         self._busy = False
         return False
 
-    # ---- icon/colour helpers -------------------------------------
-    @staticmethod
-    def _wan_dot(w):
-        if not w.get("up"):
-            return "dot-red"
-        ping = w.get("ping")
-        if ping and ping.get("state") == "degraded":
-            return "dot-amber"
-        return "dot-green"
-
     # ---- rendering -----------------------------------------------
     def _render(self, data):
         overall = data.get("overall", "unknown")
@@ -122,15 +112,14 @@ class ER605Indicator:
         for child in self.menu.get_children():
             self.menu.remove(child)
 
-        # Header: overall state with a colour dot.
-        self._info(STATE_DOT.get(overall, "dot-grey"),
-                   f"<b>ER605 — {esc(overall.upper())}</b>")
+        # Header: overall state.
+        self._info(f"<b>ER605 — {esc(overall.upper())}</b>")
         if data.get("error"):
-            self._info(None, f"<span alpha='65%'>⚠ {esc(data['error'])}</span>")
+            self._info(f"<span alpha='65%'>⚠ {esc(data['error'])}</span>")
         if data.get("_note"):
-            self._info(None, f"<span alpha='55%'>{esc(data['_note'])}</span>")
+            self._info(f"<span alpha='55%'>{esc(data['_note'])}</span>")
 
-        # Per-WAN rows: dot + two-line label (name/state, then dim details).
+        # Per-WAN rows: name/state, then a dim details line.
         if wans:
             self._sep()
         for i, w in enumerate(wans):
@@ -154,59 +143,40 @@ class ER605Indicator:
             markup = primary
             if bits:
                 markup += f"\n<span size='small' alpha='55%'>{' · '.join(bits)}</span>"
-            self._info(self._wan_dot(w), markup)
+            self._info(markup)
 
         inet = data.get("internet")
         if inet:
             self._sep()
             extra = f" · {esc(inet.get('rtt_ms'))} ms" if inet.get("rtt_ms") is not None else ""
-            self._info("dot-green" if inet.get("online") else "dot-red",
-                       f"Internet → {esc(inet.get('target', '?'))}  "
+            self._info(f"Internet → {esc(inet.get('target', '?'))}  "
                        f"<span alpha='70%'>{esc(inet.get('state', '?'))}{extra}</span>")
 
         ts = data.get("timestamp")
         if ts:
             self._sep()
-            self._info(None, f"<span size='small' alpha='55%'>Updated {esc(ts.replace('T', ' ')[:19])}</span>")
+            self._info(f"<span size='small' alpha='55%'>Updated {esc(ts.replace('T', ' ')[:19])}</span>")
 
         self._sep()
-        self._action("view-refresh-symbolic", "Refresh now", lambda _: self.refresh(False))
-        self._action("emblem-synchronizing-symbolic", "Full check (ping / RTT)", lambda _: self.refresh(True))
+        self._action("Refresh now", lambda _: self.refresh(False))
+        self._action("Full check (ping / RTT)", lambda _: self.refresh(True))
         self._sep()
-        self._action("application-exit-symbolic", "Quit", lambda _: Gtk.main_quit())
+        self._action("Quit", lambda _: Gtk.main_quit())
         self.menu.show_all()
         return False
 
     # ---- menu-row builders ---------------------------------------
-    def _icon_widget(self, icon):
-        """icon: a dot-* name (file in icons/) or a themed *-symbolic name, or None."""
-        if not icon:
-            img = Gtk.Image()
-            img.set_size_request(16, 16)      # keep text aligned with iconed rows
-            return img
-        path = os.path.join(ICONS, icon + ".svg")
-        if os.path.exists(path):
-            return Gtk.Image.new_from_file(path)
-        return Gtk.Image.new_from_icon_name(icon, Gtk.IconSize.MENU)
-
-    def _info(self, icon, markup):
+    def _info(self, markup):
         item = Gtk.MenuItem()
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=9)
-        box.pack_start(self._icon_widget(icon), False, False, 0)
         lbl = Gtk.Label(xalign=0.0)
         lbl.set_markup(markup)
-        box.pack_start(lbl, True, True, 0)
-        item.add(box)
-        item.set_sensitive(False)
+        item.add(lbl)
+        # Sensitive (so text isn't desaturated); no activate handler → clicking
+        # these info rows is a harmless no-op.
         self.menu.append(item)
 
-    def _action(self, icon, text, cb):
-        item = Gtk.MenuItem()
-        box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=9)
-        box.pack_start(self._icon_widget(icon), False, False, 0)
-        lbl = Gtk.Label(label=text, xalign=0.0)
-        box.pack_start(lbl, True, True, 0)
-        item.add(box)
+    def _action(self, text, cb):
+        item = Gtk.MenuItem(label=text)
         item.connect("activate", cb)
         self.menu.append(item)
 
