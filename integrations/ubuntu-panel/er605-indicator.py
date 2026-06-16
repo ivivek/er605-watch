@@ -3,8 +3,8 @@
 # ER605 dual-WAN status — Ubuntu top-panel (AppIndicator) tray icon.
 #
 # Runs `er605-watch --json` on a timer and shows a custom tinted status icon in
-# the GNOME panel (green/amber/red/grey transmit-receive arrows) with a polished
-# dropdown: per-WAN status-dot rows, IP/gateway/RTT, internet, last-updated.
+# the GNOME panel (green/amber/red/grey transmit-receive arrows) with a plain-text
+# dropdown: per-WAN state + latency, internet, last-updated (no IPs shown).
 # Direct mode — it drives the router itself; creds come from the repo-root .env.
 #
 # Deps: python3-gi, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1
@@ -126,11 +126,7 @@ class ER605Indicator:
             name = w.get("isp") or w.get("name") or f"WAN{i + 1}"
             port = w.get("port", i + 1)
             state = "up" if w.get("up") else (w.get("status") or "down")
-            bits = []
-            if w.get("ip"):
-                bits.append(esc(w["ip"]))
-            if w.get("gateway"):
-                bits.append("gw " + esc(w["gateway"]))
+            bits = []  # IPs intentionally omitted; just latency/loss
             ping = w.get("ping")
             if ping:
                 rtt = ping.get("rtt_ms")
@@ -149,8 +145,7 @@ class ER605Indicator:
         if inet:
             self._sep()
             extra = f" · {esc(inet.get('rtt_ms'))} ms" if inet.get("rtt_ms") is not None else ""
-            self._info(f"Internet → {esc(inet.get('target', '?'))}  "
-                       f"<span alpha='70%'>{esc(inet.get('state', '?'))}{extra}</span>")
+            self._info(f"Internet  <span alpha='70%'>{esc(inet.get('state', '?'))}{extra}</span>")
 
         ts = data.get("timestamp")
         if ts:
