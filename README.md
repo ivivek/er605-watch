@@ -17,16 +17,18 @@ the scripts are built specifically to work around them:
 | # | Limitation | Consequence | Workaround used |
 |---|-----------|-------------|-----------------|
 | 1 | **Legacy host key only.** Dropbear offers only the `ssh-rsa` (SHA-1) host key, which modern OpenSSH disables by default. | `ssh` fails with *"no matching host key type found. Their offer: ssh-rsa"* and the script dies before doing anything. | Connect with `-o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa`. |
-| 2 | **No exec mode.** Running `ssh router "show arp"` does **not** execute the command — the CLI ignores it and just prints a `Match mac success` banner, then closes. | One-shot commands silently return garbage. | Allocate a real PTY (`ssh -tt`) and feed commands over **stdin**, as if typing them interactively. |
-| 3 | **Non-zero exit codes on success.** The CLI returns a non-zero exit status even when a command succeeds. | Scripts that check `$?` wrongly conclude "SSH failed". | Judge success by the SSH *transport* (exit 255 = real failure), not by the remote command's exit code. |
-| 4 | **No readiness signal / no flow control.** The CLI gives no prompt-ready marker, and input sent too early is discarded. | Piping all commands at once truncates or drops output. | **Pace** the input with `sleep`s — wait for the prompt after login, after `enable`, and after each command. |
+| 2 | **No exec mode.** Running `ssh router "show arp"` does **not** execute the command — the CLI ignores it and just prints a `Match mac success` banner, then closes. | One-shot commands silently return garbage. | Allocate a real PTY (`ssh -tt`) and feed commands interactively. |
+| 3 | **Non-zero exit codes on success.** The CLI returns a non-zero exit status even when a command succeeds. | Scripts that check `$?` wrongly conclude "SSH failed". | Judge success by the SSH *transport* / by whether a prompt came back, not by the remote command's exit code. |
+| 4 | **No readiness signal / no flow control.** The CLI gives no prompt-ready marker, and input sent too early is discarded. | Piping all commands at once truncates or drops output. | Drive the session with [`expect`](https://core.tcl-lang.org/expect/): send a command, then **wait for the `#` prompt to return** before sending the next. No blind `sleep`s — it runs as fast as the router responds. |
 | 5 | **Privileged commands gated behind `enable`.** The base prompt (`>`) only offers `help/exit/enable/disable`. | `show ...` / `ping` don't exist until you elevate. | Send `enable` first to reach the `#` prompt before running anything useful. |
-| 6 | **Password auth only (in practice).** Key auth is often not usable; login is via password. | Cannot script `ssh` non-interactively without help. | Use [`sshpass`](https://linux.die.net/man/1/sshpass) to supply the password. |
-| 7 | **`ping` cannot be bound to a source interface.** The CLI `ping <ip>` follows the routing table only — there is no "ping via WAN2" option. | You can't directly test "internet over WAN2". | Ping **each WAN's own default gateway** (which egresses that specific link) for a true per-WAN health check; ping a public IP separately for overall internet. |
-| 8 | **Limited command set.** `show interface switchport <1-5>` and `show interface vlan <id>` require parameters; commands like `show ip route` are not registered. | Generic networking commands don't exist. | Use only the verified command grammar (see `probe_cli.sh`). |
+| 6 | **Password auth only (in practice).** Key auth is often not usable; login is via password. | Cannot script `ssh` non-interactively without help. | Let `expect` type the password at the prompt. |
+| 7 | **No clean logout / EOF.** After `exit`, the router does not promptly send EOF; `expect eof` blocks for the full timeout (~30s per session). | A naive driver is dozens of seconds slower than the actual work. | Once all output is captured, `close` the connection from our side instead of waiting for EOF. |
+| 8 | **`ping` cannot be bound to a source interface.** The CLI `ping <ip>` follows the routing table only — there is no "ping via WAN2" option. | You can't directly test "internet over WAN2". | Ping **each WAN's own default gateway** (which egresses that specific link) for a true per-WAN health check; ping a public IP separately for overall internet. |
+| 9 | **Limited command set.** `show interface switchport <1-5>` and `show interface vlan <id>` require parameters; commands like `show ip route` are not registered. | Generic networking commands don't exist. | Use only the verified command grammar (see `probe_cli.sh`). |
 
-Because of #2 and #4, **every interaction is essentially screen-scraping a paced,
-interactive terminal session** — not a clean request/response API.
+Because of #2 and #4, **every interaction is essentially screen-scraping an
+interactive terminal session** — not a clean request/response API. The scripts use
+`expect` to make that reliable and fast.
 
 ---
 
@@ -79,17 +81,21 @@ DELAY=12 ./probe_cli.sh "ping 8.8.8.8"           # bump per-command wait for slo
 ## Requirements
 
 - `bash`
-- `sshpass` — `sudo apt-get install sshpass`
+- `expect` — `sudo apt-get install expect` (drives the interactive CLI; `check_wan.sh` types the password itself, so `sshpass` is **not** required)
 - `ssh` (OpenSSH client)
 - SSH enabled on the router (Omada: enable CLI/SSH access)
+
+> Note: `probe_cli.sh` is the older `sleep`-paced helper and still uses
+> [`sshpass`](https://linux.die.net/man/1/sshpass) — only needed if you use that
+> debug tool.
 
 ## Notes & caveats
 
 - **Password handling.** Passing the password as a CLI argument leaves it in your
   shell history and process list. Prefer the `ROUTER_PASS` environment variable.
-- **Speed.** A full run takes ~40s. Most of that is the fixed `sleep` pacing
-  (especially the 12s-per-ping waits) made necessary by limitation #4 — there is
-  no completion signal to wait on, so the script over-waits to avoid truncation.
+- **Speed.** A full run takes ~14s. Because `check_wan.sh` waits on the `#` prompt
+  (via `expect`) instead of fixed `sleep`s, the time is essentially just the SSH
+  logins plus the actual `ping` durations — there is no wasted blind waiting.
 - **Firmware-specific.** Output parsing is matched to firmware 2.3.0's exact text
   format. A different firmware version may change field labels; use `probe_cli.sh`
   to re-check and adjust the parsers.

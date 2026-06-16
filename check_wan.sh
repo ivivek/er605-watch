@@ -57,39 +57,50 @@ fi
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 
-# ─── SSH ──────────────────────────────────────────────────────
-# ER605 runs Dropbear and only offers legacy ssh-rsa, which modern OpenSSH
-# disables by default — re-enable it. The CLI is interactive (no exec mode),
-# so we allocate a PTY (-tt) and feed paced commands over stdin.
-SSH_OPTS=(
-    -tt
-    -o StrictHostKeyChecking=no
-    -o ConnectTimeout=10
-    -o HostKeyAlgorithms=+ssh-rsa
-    -o PubkeyAcceptedAlgorithms=+ssh-rsa
-    -p "$ROUTER_PORT"
-)
-
-if ! command -v sshpass &>/dev/null; then
-    echo "ERROR: sshpass not found. Install it: sudo apt-get install sshpass" >&2
+# ─── SSH / CLI DRIVER ─────────────────────────────────────────
+# The ER605 CLI is interactive (no exec mode) and gives no completion signal,
+# so we drive it with `expect`: type the password, enter `enable`, then send
+# each command and wait for the `#` prompt to return — no blind sleeps. ER605
+# runs Dropbear (legacy ssh-rsa host key), so we re-enable that algorithm.
+if ! command -v expect &>/dev/null; then
+    echo "ERROR: expect not found. Install it: sudo apt-get install expect" >&2
     exit 1
 fi
 
-# run_cli "cmd|||delay" "cmd|||delay" ...
-# Enters privileged mode, runs each command waiting <delay>s, returns raw output.
+# run_cli "cmd" "cmd" ...
+# Runs each command in privileged mode and returns the raw session output.
+# Waits on the prompt (not the clock), so it's as fast as the router responds.
 run_cli() {
-    {
-        sleep 3; printf 'enable\r\n'; sleep 2
-        local spec cmd d
-        for spec in "$@"; do
-            cmd="${spec%%|||*}"
-            d="${spec##*|||}"
-            printf '%s\r\n' "$cmd"
-            sleep "$d"
-        done
-        printf 'exit\r\n'; sleep 1; printf 'exit\r\n'; sleep 1
-    } | sshpass -p "$ROUTER_PASS" ssh "${SSH_OPTS[@]}" "${ROUTER_USER}@${ROUTER_IP}" 2>/dev/null \
-      | tr -d '\r'
+    CLI_CMDS="$(printf '%s\n' "$@")" \
+    EXP_HOST="$ROUTER_IP" EXP_USER="$ROUTER_USER" \
+    EXP_PASS="$ROUTER_PASS" EXP_PORT="$ROUTER_PORT" \
+    expect -f - <<'EXPECT' 2>/dev/null | tr -d '\r'
+        set timeout 30
+        set pass $env(EXP_PASS)
+        set cmds [split $env(CLI_CMDS) "\n"]
+
+        spawn ssh -tt \
+            -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
+            -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa \
+            -p $env(EXP_PORT) $env(EXP_USER)@$env(EXP_HOST)
+
+        expect "assword:"      ;# password prompt
+        send "$pass\r"
+        expect ">"             ;# base CLI prompt
+        send "enable\r"
+        expect "#"             ;# privileged prompt
+
+        foreach c $cmds {
+            if {$c eq ""} continue
+            send "$c\r"
+            expect "#"         ;# command done when prompt returns
+        }
+        # We already have all command output. The router doesn't reliably send
+        # EOF on logout (expect eof would block the full timeout), so request
+        # logout and force-close our side immediately.
+        send "exit\r"; send "exit\r"
+        close; wait
+EXPECT
 }
 
 # Extract the output block for a given command from raw session output.
@@ -177,9 +188,9 @@ print_header
 
 echo -e "${YELLOW}► Querying router (interfaces + ARP)...${RESET}\n"
 RAW=$(run_cli \
-    "show interface switchport ${WAN1_PORT}|||3" \
-    "show interface switchport ${WAN2_PORT}|||3" \
-    "show arp|||3")
+    "show interface switchport ${WAN1_PORT}" \
+    "show interface switchport ${WAN2_PORT}" \
+    "show arp")
 
 if ! grep -q '#' <<< "$RAW"; then
     echo -e "${RED}✗ Could not get a CLI prompt. Check IP, password, and SSH access.${RESET}"
@@ -201,9 +212,9 @@ echo ""
 echo -e "${YELLOW}► Testing connectivity (per-WAN gateway + public)...${RESET}\n"
 
 PING_CMDS=()
-[[ -n "$WAN1_GW" && "$WAN1_GW" != "0.0.0.0" ]] && PING_CMDS+=("ping ${WAN1_GW}|||12")
-[[ -n "$WAN2_GW" && "$WAN2_GW" != "0.0.0.0" ]] && PING_CMDS+=("ping ${WAN2_GW}|||12")
-PING_CMDS+=("ping ${PING_PUBLIC}|||12")
+[[ -n "$WAN1_GW" && "$WAN1_GW" != "0.0.0.0" ]] && PING_CMDS+=("ping ${WAN1_GW}")
+[[ -n "$WAN2_GW" && "$WAN2_GW" != "0.0.0.0" ]] && PING_CMDS+=("ping ${WAN2_GW}")
+PING_CMDS+=("ping ${PING_PUBLIC}")
 
 PRAW=$(run_cli "${PING_CMDS[@]}")
 
