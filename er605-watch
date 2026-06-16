@@ -5,10 +5,10 @@
 #
 # Config precedence (highest first): CLI flag > inline env var > env file.
 #   Env file : .env next to this script (git-ignored). See .env.example.
-# Usage: ./check_wan.sh [--trace]               # all from .env
-#        ./check_wan.sh <password> [--trace]
-#        ./check_wan.sh --host <ip> <password> [--trace]
-#        ROUTER_IP=... ROUTER_PASS=... ./check_wan.sh
+# Usage: ./er605-watch [--trace]               # all from .env
+#        ./er605-watch <password> [--trace]
+#        ./er605-watch --host <ip> <password> [--trace]
+#        ROUTER_IP=... ROUTER_PASS=... ./er605-watch
 #   --trace / -t : also run a traceroute to the public target (slower)
 # =============================================================
 

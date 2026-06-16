@@ -48,7 +48,7 @@ config tweaks; on switches/APs reuse the *driver*, rewrite the *commands*.
 Config comes from three sources, **highest precedence first**:
 
 1. **CLI flags / positional args** — `--host <ip>`, `<password>`, `--trace`
-2. **Inline environment variables** — `ROUTER_IP=… ROUTER_PASS=… ./check_wan.sh`
+2. **Inline environment variables** — `ROUTER_IP=… ROUTER_PASS=… ./er605-watch`
 3. **`.env` file** next to the scripts — git-ignored, holds your site-specific values
 
 No router IP or password is stored in the repo. Set up your local `.env` once:
@@ -69,12 +69,12 @@ ROUTER_PASS=yourpassword
 # optional: ROUTER_USER, ROUTER_PORT, WAN1_PORT, WAN2_PORT, PING_PUBLIC, WAN1_GW, WAN2_GW
 ```
 
-With `.env` in place you can just run `./check_wan.sh`. Override ad-hoc without
+With `.env` in place you can just run `./er605-watch`. Override ad-hoc without
 touching the file:
 
 ```bash
-./check_wan.sh --host 10.0.0.1 'pass'      # different router, this run only
-ROUTER_IP=10.0.0.1 ./check_wan.sh          # via env var
+./er605-watch --host 10.0.0.1 'pass'      # different router, this run only
+ROUTER_IP=10.0.0.1 ./er605-watch          # via env var
 ```
 
 The same `.env` is shared by `probe_cli.sh` and `debug_expect.sh`.
@@ -108,13 +108,13 @@ interactive terminal session** — not a clean request/response API. The scripts
 
 ## Scripts
 
-### `check_wan.sh` — the dual-WAN status report
+### `er605-watch` — the dual-WAN status report
 
 ```bash
-./check_wan.sh                                  # all from .env  (~13s)
-./check_wan.sh '<router-password>'              # password as arg, rest from .env
-./check_wan.sh --host <ip> '<router-password>'  # override the router IP
-./check_wan.sh --trace                          # also run a traceroute (slow)
+./er605-watch                                  # all from .env  (~13s)
+./er605-watch '<router-password>'              # password as arg, rest from .env
+./er605-watch --host <ip> '<router-password>'  # override the router IP
+./er605-watch --trace                          # also run a traceroute (slow)
 ```
 
 What it does (`expect`-driven — waits on the `#` prompt, no blind sleeps; one SSH
@@ -183,7 +183,7 @@ ROUTER_IP=... RPASS='<router-password>' ./debug_expect.sh   # or set them in .en
 ## Requirements
 
 - `bash`
-- `expect` — `sudo apt-get install expect` (drives the interactive CLI; `check_wan.sh` types the password itself, so `sshpass` is **not** required)
+- `expect` — `sudo apt-get install expect` (drives the interactive CLI; `er605-watch` types the password itself, so `sshpass` is **not** required)
 - `ssh` (OpenSSH client)
 - SSH enabled on the router (Omada: enable CLI/SSH access)
 
@@ -196,7 +196,7 @@ ROUTER_IP=... RPASS='<router-password>' ./debug_expect.sh   # or set them in .en
 - **Password handling.** Passing the password as a CLI argument leaves it in your
   shell history and process list (`ps`). Prefer putting `ROUTER_PASS` in a
   `chmod 600` `.env` file, or an inline `ROUTER_PASS=… ` env var.
-- **Speed.** A full run takes ~14s. Because `check_wan.sh` waits on the `#` prompt
+- **Speed.** A full run takes ~14s. Because `er605-watch` waits on the `#` prompt
   (via `expect`) instead of fixed `sleep`s, the time is essentially just the SSH
   logins plus the actual `ping` durations — there is no wasted blind waiting.
 - **Firmware-specific.** Output parsing is matched to firmware 2.3.0's exact text
