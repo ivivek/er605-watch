@@ -5,10 +5,11 @@
 #
 # Config precedence (highest first): CLI flag > inline env var > env file.
 #   Env file : .env next to this script (git-ignored). See .env.example.
-# Usage: ./check_wan.sh                         # all from .env
-#        ./check_wan.sh <password>              # password as arg
-#        ./check_wan.sh --host <ip> <password>
+# Usage: ./check_wan.sh [--trace]               # all from .env
+#        ./check_wan.sh <password> [--trace]
+#        ./check_wan.sh --host <ip> <password> [--trace]
 #        ROUTER_IP=... ROUTER_PASS=... ./check_wan.sh
+#   --trace / -t : also run a traceroute to the public target (slower)
 # =============================================================
 
 # ─── CONFIG ───────────────────────────────────────────────────
@@ -30,15 +31,27 @@ ROUTER_PORT="${ROUTER_PORT:-22}"
 WAN1_PORT="${WAN1_PORT:-1}"
 WAN2_PORT="${WAN2_PORT:-2}"
 
-# Public IP to test overall internet reachability
+# WAN gateways to ping for per-link health (the CLI ping can't be bound to a
+# WAN, so we ping each WAN's own gateway — traffic to it can only egress that
+# link). Blank by default: the script auto-discovers them from "show interface
+# switchport" so no site-specific IPs are needed. Set both (here or in .env) to
+# run everything in ONE SSH login instead of two (saves ~1s); the script then
+# warns on live-vs-config drift.
+WAN1_GW="${WAN1_GW:-}"
+WAN2_GW="${WAN2_GW:-}"
+
+# Public IP to test overall internet reachability (follows the active route)
 PING_PUBLIC="${PING_PUBLIC:-8.8.8.8}"
 
-# CLI args (override everything): [--host <ip>] [<password>]
+# CLI args (override everything): [--host <ip>] [--trace] [<password>].
+# Traceroute follows the active route only, so it traces whichever WAN carries it.
+DO_TRACE="${DO_TRACE:-0}"
 PASS_ARG=""; HOST_ARG=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --host|-H) HOST_ARG="$2"; shift 2 ;;
-        *)         PASS_ARG="$1"; shift ;;
+        --trace|-t) DO_TRACE=1; shift ;;
+        --host|-H)  HOST_ARG="$2"; shift 2 ;;
+        *)          PASS_ARG="$1"; shift ;;
     esac
 done
 [[ -n "$HOST_ARG" ]] && ROUTER_IP="$HOST_ARG"
@@ -75,7 +88,7 @@ run_cli() {
     EXP_HOST="$ROUTER_IP" EXP_USER="$ROUTER_USER" \
     EXP_PASS="$ROUTER_PASS" EXP_PORT="$ROUTER_PORT" \
     expect -f - <<'EXPECT' 2>/dev/null | tr -d '\r'
-        set timeout 30
+        set timeout 90        ;# ceiling only (we return on prompt); high for slow tracert
         set pass $env(EXP_PASS)
         set cmds [split $env(CLI_CMDS) "\n"]
 
@@ -135,10 +148,13 @@ print_header() {
     echo ""
 }
 
-# Print one WAN's parsed details; echoes the gateway IP on stdout (last line)
-# so the caller can ping it. Human-readable lines go to stderr.
+# Extract just the default gateway from a switchport block.
+wan_gateway() { get_field "$1" "Default Gateway"; }
+
+# Display one WAN's parsed details (stdout). If $3 (the configured gateway) is
+# set and differs from the live gateway, warn about config drift.
 show_wan() {
-    local block="$1" label="$2"
+    local block="$1" label="$2" cfg_gw="$3"
     local name type status proto ip gw dns
     name=$(get_field "$block"   "Port name")
     type=$(get_field "$block"   "Vlan type")
@@ -148,25 +164,24 @@ show_wan() {
     gw=$(get_field "$block"     "Default Gateway")
     dns=$(get_field "$block"    "Primary DNS")
 
-    {
-        echo -e "${BOLD}── ${label} (switchport) ───────────────────────${RESET}"
-        echo -e "  Port Name : ${name:-?}"
-        echo -e "  Type      : ${type:-?}"
-        if [[ "${status^^}" == "UP" ]]; then
-            echo -e "  Status    : ${GREEN}UP${RESET}"
-        elif [[ -n "$status" ]]; then
-            echo -e "  Status    : ${RED}${status}${RESET}"
-        else
-            echo -e "  Status    : ${YELLOW}unknown${RESET}"
-        fi
-        echo -e "  Proto     : ${proto:-?}"
-        echo -e "  IP        : ${ip:-—}"
-        echo -e "  Gateway   : ${gw:-—}"
-        echo -e "  DNS       : ${dns:-—}"
-        echo ""
-    } >&2
-
-    echo "$gw"
+    echo -e "${BOLD}── ${label} (switchport) ───────────────────────${RESET}"
+    echo -e "  Port Name : ${name:-?}"
+    echo -e "  Type      : ${type:-?}"
+    if [[ "${status^^}" == "UP" ]]; then
+        echo -e "  Status    : ${GREEN}UP${RESET}"
+    elif [[ -n "$status" ]]; then
+        echo -e "  Status    : ${RED}${status}${RESET}"
+    else
+        echo -e "  Status    : ${YELLOW}unknown${RESET}"
+    fi
+    echo -e "  Proto     : ${proto:-?}"
+    echo -e "  IP        : ${ip:-—}"
+    echo -e "  Gateway   : ${gw:-—}"
+    if [[ -n "$cfg_gw" && -n "$gw" && "$cfg_gw" != "$gw" ]]; then
+        echo -e "  ${YELLOW}⚠ configured ${cfg_gw} ≠ live ${gw} — update WAN_GW in config${RESET}"
+    fi
+    echo -e "  DNS       : ${dns:-—}"
+    echo ""
 }
 
 ping_result() {
@@ -183,14 +198,38 @@ ping_result() {
     fi
 }
 
+# Summarise a single per-WAN gateway ping line.
+summarise_gw() {
+    local praw="$1" gw="$2" label="$3"
+    if [[ -n "$gw" && "$gw" != "0.0.0.0" ]]; then
+        ping_result "$(extract "$praw" "ping ${gw}")" "$label" "$gw"
+    else
+        echo -e "  ${label} : ${RED}● no gateway (down?)${RESET}"
+    fi
+}
+
 # ─── MAIN ─────────────────────────────────────────────────────
 print_header
 
-echo -e "${YELLOW}► Querying router (interfaces + ARP)...${RESET}\n"
-RAW=$(run_cli \
-    "show interface switchport ${WAN1_PORT}" \
-    "show interface switchport ${WAN2_PORT}" \
-    "show arp")
+# Discover mode kicks in only if a WAN gateway is left blank in config. With
+# both gateways set, everything runs in a SINGLE SSH login (shows + pings).
+DISCOVER=0
+[[ -z "$WAN1_GW" || -z "$WAN2_GW" ]] && DISCOVER=1
+
+CMDS=(
+    "show interface switchport ${WAN1_PORT}"
+    "show interface switchport ${WAN2_PORT}"
+    "show arp"
+)
+if [[ $DISCOVER -eq 0 ]]; then
+    [[ "$WAN1_GW" != "0.0.0.0" ]] && CMDS+=("ping ${WAN1_GW}")
+    [[ "$WAN2_GW" != "0.0.0.0" ]] && CMDS+=("ping ${WAN2_GW}")
+    CMDS+=("ping ${PING_PUBLIC}")
+    [[ $DO_TRACE -eq 1 ]] && CMDS+=("tracert ${PING_PUBLIC}")
+fi
+
+echo -e "${YELLOW}► Querying router...${RESET}\n"
+RAW=$(run_cli "${CMDS[@]}")
 
 if ! grep -q '#' <<< "$RAW"; then
     echo -e "${RED}✗ Could not get a CLI prompt. Check IP, password, and SSH access.${RESET}"
@@ -201,40 +240,50 @@ WAN1_BLOCK=$(extract "$RAW" "show interface switchport ${WAN1_PORT}")
 WAN2_BLOCK=$(extract "$RAW" "show interface switchport ${WAN2_PORT}")
 ARP_BLOCK=$(extract "$RAW" "show arp")
 
-WAN1_GW=$(show_wan "$WAN1_BLOCK" "WAN1")
-WAN2_GW=$(show_wan "$WAN2_BLOCK" "WAN2")
+show_wan "$WAN1_BLOCK" "WAN1" "$WAN1_GW"
+show_wan "$WAN2_BLOCK" "WAN2" "$WAN2_GW"
 
 echo -e "${BOLD}── ARP Table ─────────────────────────────────────${RESET}"
 grep -vE '^[[:space:]]*$' <<< "$ARP_BLOCK" | sed 's/^/  /'
 echo ""
 
-# ─── Connectivity tests ───────────────────────────────────────
-echo -e "${YELLOW}► Testing connectivity (per-WAN gateway + public)...${RESET}\n"
-
-PING_CMDS=()
-[[ -n "$WAN1_GW" && "$WAN1_GW" != "0.0.0.0" ]] && PING_CMDS+=("ping ${WAN1_GW}")
-[[ -n "$WAN2_GW" && "$WAN2_GW" != "0.0.0.0" ]] && PING_CMDS+=("ping ${WAN2_GW}")
-PING_CMDS+=("ping ${PING_PUBLIC}")
-
-PRAW=$(run_cli "${PING_CMDS[@]}")
+# Effective gateways + ping output. Hardcoded → pings already in RAW. Discover
+# → read live gateways and run a 2nd session to ping them.
+g1="$WAN1_GW"; g2="$WAN2_GW"; PRAW="$RAW"
+if [[ $DISCOVER -eq 1 ]]; then
+    g1=$(wan_gateway "$WAN1_BLOCK")
+    g2=$(wan_gateway "$WAN2_BLOCK")
+    echo -e "${YELLOW}► Testing connectivity (discovered gateways)...${RESET}\n"
+    PING_CMDS=()
+    [[ -n "$g1" && "$g1" != "0.0.0.0" ]] && PING_CMDS+=("ping ${g1}")
+    [[ -n "$g2" && "$g2" != "0.0.0.0" ]] && PING_CMDS+=("ping ${g2}")
+    PING_CMDS+=("ping ${PING_PUBLIC}")
+    [[ $DO_TRACE -eq 1 ]] && PING_CMDS+=("tracert ${PING_PUBLIC}")
+    PRAW=$(run_cli "${PING_CMDS[@]}")
+fi
 
 echo -e "${BOLD}${CYAN}══════════════════════════════════════════════${RESET}"
 echo -e "${BOLD}  Summary${RESET}"
 echo -e "${BOLD}${CYAN}══════════════════════════════════════════════${RESET}"
 
-if [[ -n "$WAN1_GW" && "$WAN1_GW" != "0.0.0.0" ]]; then
-    ping_result "$(extract "$PRAW" "ping ${WAN1_GW}")" "WAN1 gw " "$WAN1_GW"
-else
-    echo -e "  WAN1 gw  : ${RED}● no gateway (down?)${RESET}"
-fi
-if [[ -n "$WAN2_GW" && "$WAN2_GW" != "0.0.0.0" ]]; then
-    ping_result "$(extract "$PRAW" "ping ${WAN2_GW}")" "WAN2 gw " "$WAN2_GW"
-else
-    echo -e "  WAN2 gw  : ${RED}● no gateway (down?)${RESET}"
-fi
+summarise_gw "$PRAW" "$g1" "WAN1 gw "
+summarise_gw "$PRAW" "$g2" "WAN2 gw "
 ping_result "$(extract "$PRAW" "ping ${PING_PUBLIC}")" "Internet" "$PING_PUBLIC"
 
 echo ""
 echo -e "  ${CYAN}Note:${RESET} per-WAN lines ping each WAN's own gateway (true per-link health)."
 echo -e "        The Internet line follows the router's active route (load-balance/failover)."
 echo ""
+
+# ─── Traceroute (opt-in) ──────────────────────────────────────
+if [[ $DO_TRACE -eq 1 ]]; then
+    TRACE_BLOCK=$(extract "$PRAW" "tracert ${PING_PUBLIC}")
+    echo -e "${BOLD}── Traceroute → ${PING_PUBLIC} ──────────────────────${RESET}"
+    if [[ -n "$TRACE_BLOCK" ]]; then
+        grep -vE '^[[:space:]]*$' <<< "$TRACE_BLOCK" | sed 's/^/  /'
+        echo -e "  ${CYAN}(via the active route — hop 1 shows which WAN it took)${RESET}"
+    else
+        echo -e "  ${YELLOW}no traceroute output captured${RESET}"
+    fi
+    echo ""
+fi

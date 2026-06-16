@@ -23,7 +23,7 @@ the scripts are built specifically to work around them:
 | 5 | **Privileged commands gated behind `enable`.** The base prompt (`>`) only offers `help/exit/enable/disable`. | `show ...` / `ping` don't exist until you elevate. | Send `enable` first to reach the `#` prompt before running anything useful. |
 | 6 | **Password auth only (in practice).** Key auth is often not usable; login is via password. | Cannot script `ssh` non-interactively without help. | Let `expect` type the password at the prompt. |
 | 7 | **No clean logout / EOF.** After `exit`, the router does not promptly send EOF; `expect eof` blocks for the full timeout (~30s per session). | A naive driver is dozens of seconds slower than the actual work. | Once all output is captured, `close` the connection from our side instead of waiting for EOF. |
-| 8 | **`ping` cannot be bound to a source interface.** The CLI `ping <ip>` follows the routing table only — there is no "ping via WAN2" option. | You can't directly test "internet over WAN2". | Ping **each WAN's own default gateway** (which egresses that specific link) for a true per-WAN health check; ping a public IP separately for overall internet. |
+| 8 | **`ping`/`tracert` cannot be bound to a source interface.** Both take only an IP (`ping <ip>` / `tracert <ip>`; extra args give *"Too many parameters"*) and follow the routing table — there is no "ping via WAN2" option. | You can't directly test "internet over WAN2"; a traceroute only shows the active path. | Ping **each WAN's own default gateway** (which egresses that specific link) for a true per-WAN health check; ping a public IP separately for overall internet. `tracert`'s hop 1 reveals which WAN the route used. |
 | 9 | **Limited command set.** `show interface switchport <1-5>` and `show interface vlan <id>` require parameters; commands like `show ip route` are not registered. | Generic networking commands don't exist. | Use only the verified command grammar (see `probe_cli.sh`). |
 
 Because of #2 and #4, **every interaction is essentially screen-scraping an
@@ -37,31 +37,40 @@ interactive terminal session** — not a clean request/response API. The scripts
 ### `check_wan.sh` — the dual-WAN status report
 
 ```bash
-./check_wan.sh '<router-password>'
+./check_wan.sh '<router-password>'              # ~13s
+./check_wan.sh '<router-password>' --trace      # also run a traceroute (slow)
 # or
 ROUTER_PASS='<router-password>' ./check_wan.sh
 ```
 
-What it does:
+What it does — all in **one SSH login** (`expect`-driven, waits on the `#` prompt):
 
-1. **Connects** with the host-key workaround + PTY + paced stdin, and runs
+1. **Connects** with the host-key workaround + PTY, types the password, and runs
    `enable` to reach privileged mode.
-2. **Session 1** — runs `show interface switchport 1`, `show interface switchport 2`,
-   and `show arp`, then parses each WAN's:
+2. **`show interface switchport 1/2` + `show arp`** — parses each WAN's:
    - Port name, VLAN type, Routing Interface **Status** (UP/DOWN)
    - Protocol (dhcp / pppoe / static)
    - IP address, **Default Gateway**, Primary DNS
    - The full ARP table is printed as-is.
-3. **Session 2** — pings, with results parsed for packet loss and average RTT:
-   - **Each WAN's default gateway** (read live from step 2, not hardcoded) — a
-     genuine per-link health check, since gateway traffic egresses that interface.
+3. **Pings** (same session), parsed for packet loss and average RTT:
+   - **Each WAN's default gateway** — a genuine per-link health check, since
+     gateway traffic can only egress that interface.
    - A **public IP** (`8.8.8.8` by default) for overall internet reachability
      (this follows the active route / load-balance / failover).
 4. Prints a colour-coded **summary** (ONLINE / DEGRADED / OFFLINE).
+5. **`--trace` / `-t`** (optional) — appends a `tracert` to the public target.
+   Useful, but **slow**: traceroute waits out a timeout on every unresponsive
+   (`* * *`) hop, so a single trace can take ~30–60s. Hop 1 reveals which WAN
+   the active route used.
 
 Configurable at the top of the script: `ROUTER_IP`, `ROUTER_USER`, `ROUTER_PORT`,
-`WAN1_PORT`, `WAN2_PORT`, `PING_PUBLIC`. All IPs/gateways/DNS are read **live**
-from the router — only the port numbers and the public test IP are fixed.
+`WAN1_PORT`, `WAN2_PORT`, `PING_PUBLIC`, and `WAN1_GW` / `WAN2_GW`.
+
+**On the gateways (speed vs. dynamic):** `WAN1_GW` / `WAN2_GW` are hardcoded (to
+your discovered values) so the whole check runs in a **single** SSH login. The
+script still reads the *live* gateway from `show interface switchport` and prints
+a `⚠ configured ≠ live` warning if your ISP changes one. Leave either gateway
+**blank** to auto-discover it instead — at the cost of a second SSH login.
 
 ### `probe_cli.sh` — the CLI discovery / debug tool
 
