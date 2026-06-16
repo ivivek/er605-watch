@@ -202,3 +202,7 @@ ROUTER_IP=... RPASS='<router-password>' ./debug_expect.sh   # or set them in .en
 - **Firmware-specific.** Output parsing is matched to firmware 2.3.0's exact text
   format. A different firmware version may change field labels; use `probe_cli.sh`
   to re-check and adjust the parsers.
+
+## License
+
+[MIT](LICENSE) © Vivek K (ivivek)
