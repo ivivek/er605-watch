@@ -7,6 +7,41 @@ Tested on **ER605 v2.0, firmware 2.3.0 Build 20250428**.
 
 ---
 
+## Compatibility
+
+Verified only on the hardware above — everything below is informed inference, not
+tested. The project has two layers, with very different portability:
+
+**The driver & techniques (broadly reusable).** The SSH workarounds aren't really
+ER605-specific; they apply to a whole class of devices:
+
+- **Legacy `ssh-rsa` host key** → re-enabled via `HostKeyAlgorithms=+ssh-rsa` —
+  applies to almost any [Dropbear](https://matt.ucc.asn.au/dropbear/dropbear.html)-based
+  device (embedded routers, switches, NAS, IoT).
+- **No SSH "exec" mode** → PTY + `expect` prompt-detection — applies to most
+  interactive-CLI gear (Cisco IOS, MikroTik, HPE/Aruba, many embedded CLIs).
+- **`enable` → privileged `#` prompt**, **non-zero exit codes**, **no clean EOF on
+  logout** (`close` instead of `expect eof`) — all common Cisco-style-CLI traits.
+- **`probe_cli.sh`** as a "discover an unknown CLI's grammar" tool is device-agnostic.
+
+**The commands & parsers (Omada-gateway-specific).** `show interface switchport
+<1-5>`, the `Field.....Value` parsing, and the WAN/gateway logic are tied to the
+Omada **gateway** firmware (and the 2.3.0 text format).
+
+| Device class | Expectation |
+|---|---|
+| **ER605** (v2, fw 2.3.0) | ✅ Tested — works. |
+| Other **Omada gateways/routers** — ER7206, ER7212PC, ER8411 | 🟡 Likely works with minor tweaks (same firmware lineage). Different port counts (adjust `WAN*_PORT` and the `1-5` switchport range); field labels may differ slightly — re-check with `probe_cli.sh`. |
+| Other **ER605 firmware** versions | 🟡 Driver fine; parsers may need adjusting if labels changed. |
+| **Omada switches** (TL-SG…) | ❌ Different, more Cisco-like CLI and command set — parsers won't fit (driver techniques still do). |
+| **Omada EAPs** (access points) | ❌ Different CLI again. |
+| **Older non-Omada SafeStream** routers (TL-ER6020/6120, R600VPN) | ❌ Different/older firmware; may not expose this CLI at all. |
+
+Bottom line: on another **Omada gateway** expect most of it to work after small
+config tweaks; on switches/APs reuse the *driver*, rewrite the *commands*.
+
+---
+
 ## Configuration
 
 Config comes from three sources, **highest precedence first**:
