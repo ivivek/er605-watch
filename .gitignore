@@ -1,0 +1,3 @@
+# Local, site-specific config — never commit (holds router IP / password).
+# Exact match, NOT .env* — we want .env.example to stay tracked.
+.env
