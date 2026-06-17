@@ -6,6 +6,12 @@
 # .example stays tracked, the real file does not.
 integrations/home-assistant/er605-mqtt.env
 
+# Ubuntu MQTT panel's broker config (holds broker creds).
+integrations/ubuntu-panel-mqtt/er605-mqtt-panel.env
+
 # Python bytecode
 __pycache__/
 *.pyc
+
+# nohup output from launching the panel indicators
+nohup.out

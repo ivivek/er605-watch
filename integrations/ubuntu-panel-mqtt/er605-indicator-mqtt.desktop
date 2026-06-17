@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ER605 WAN Status (MQTT)
+Comment=Dual-WAN status in the GNOME top panel, fed from MQTT
+# install.sh rewrites __INDICATOR_PATH__ to the absolute path on install.
+# Invoked via python3 so it doesn't depend on the file's executable bit.
+Exec=python3 __INDICATOR_PATH__
+Icon=network-transmit-receive
+Terminal=false
+Categories=Network;Monitor;
+X-GNOME-Autostart-enabled=true

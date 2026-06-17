@@ -208,8 +208,12 @@ contract documented under [`er605-watch`](#er605-watch--the-dual-wan-status-repo
   and publishes to a Mosquitto broker; HA auto-creates entities via MQTT
   Discovery. Router credentials stay on the publisher box.
 - **[`integrations/ubuntu-panel/`](integrations/ubuntu-panel/)** — a **GNOME
-  top-panel** tray indicator: a colored dot (🟢/🟡/🔴/⚫) with per-WAN details in
-  the dropdown. Runs `er605-watch` directly on your desktop (no broker needed).
+  top-panel** tray indicator with a state-tinted icon and a per-WAN dropdown.
+  Runs `er605-watch` directly on your desktop (no broker needed).
+- **[`integrations/ubuntu-panel-mqtt/`](integrations/ubuntu-panel-mqtt/)** — the
+  same panel indicator, but **fed from MQTT** (subscribes to the publisher's
+  `er605/status`) instead of driving the router. No router creds on the desktop;
+  needs a broker. Use one panel indicator or the other, not both.
 
 > Per-WAN ISP labels: set `WAN1_ISP` / `WAN2_ISP` in `.env` and both integrations
 > (and the CLI) show e.g. "Airtel Fiber (WAN1)" in place of "WAN1".
