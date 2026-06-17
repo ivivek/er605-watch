@@ -78,6 +78,13 @@ DO_PINGS=1
 # then comes from link status, like fast mode). Applied after fast so it wins.
 [[ $TRACE_ONLY -eq 1 ]] && { DO_PINGS=0; DO_TRACE=1; }
 
+# Stream traceroute hops to the terminal live (pretty mode only). In --json the
+# stdout must stay pure JSON, so the trace is captured silently and surfaced in
+# the `traceroute` array instead. run_cli reads STREAM_TTY from the environment.
+[[ $DO_TRACE -eq 1 && $JSON_MODE -eq 0 ]] && export STREAM_TTY=1
+# How the trace surfaces, for the progress note: live (tty) vs. captured (json).
+[[ -n "$STREAM_TTY" ]] && TRACE_NOTE="hops appear live below" || TRACE_NOTE="output captured for JSON"
+
 if [[ -z "$ROUTER_IP" ]]; then
     echo "ERROR: no router IP. Set ROUTER_IP in $CONFIG_FILE, pass --host <ip>, or export ROUTER_IP." >&2
     exit 4
@@ -120,6 +127,18 @@ run_cli() {
         set pass $env(EXP_PASS)
         set cmds [split $env(CLI_CMDS) "\n"]
 
+        # Optional live tee to the controlling terminal. We still capture the
+        # whole session on stdout (for parsing/JSON); this just mirrors a slow
+        # command's output to the tty as it arrives so it isn't buffered until
+        # the login ends. Used for `tracert` (see STREAM_TTY below).
+        set ttyout ""
+        if {[info exists env(STREAM_TTY)]} {
+            # -buffering none: flush each hop to the terminal as it arrives.
+            # Without this Tcl fully-buffers the channel and the whole trace
+            # only appears when the channel is closed (i.e. all at once).
+            catch {set ttyout [open /dev/tty w]; fconfigure $ttyout -buffering none}
+        }
+
         spawn ssh -tt \
             -o StrictHostKeyChecking=no -o ConnectTimeout=10 \
             -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedAlgorithms=+ssh-rsa \
@@ -133,9 +152,15 @@ run_cli() {
 
         foreach c $cmds {
             if {$c eq ""} continue
+            # Mirror slow traceroute hops to the tty live (if STREAM_TTY opened
+            # a channel); log_user stays 1 so stdout still captures everything.
+            set tee [expr {$ttyout ne "" && [string match "tracert*" $c]}]
+            if {$tee} { log_file -a -leaveopen $ttyout }
             send "$c\r"
             expect "#"         ;# command done when prompt returns
+            if {$tee} { log_file }   ;# stop the tee (channel left open by -leaveopen)
         }
+        if {$ttyout ne ""} { catch {close $ttyout} }
         # We already have all command output. The router doesn't reliably send
         # EOF on logout (expect eof would block the full timeout), so request
         # logout and force-close our side immediately.
@@ -292,7 +317,7 @@ fi
 # If the trace runs in this login (trace-only, or full --trace with gateways set),
 # say so — it's slow and the expect driver shows nothing until it finishes.
 if [[ $DO_TRACE -eq 1 && ( $TRACE_ONLY -eq 1 || $DISCOVER -eq 0 ) ]]; then
-    progress "${YELLOW}► Querying router + tracing route to ${PING_PUBLIC} (slow — dead hops time out, up to ~60s; output appears when done)...${RESET}"
+    progress "${YELLOW}► Querying router + tracing route to ${PING_PUBLIC} (slow — dead hops time out, up to ~60s; ${TRACE_NOTE})...${RESET}"
 else
     progress "${YELLOW}► Querying router...${RESET}"
 fi
@@ -335,7 +360,7 @@ lbl1="${WAN1_ISP:-WAN1}"; lbl2="${WAN2_ISP:-WAN2}"
 PRAW="$RAW"
 if [[ $DO_PINGS -eq 1 && $DISCOVER -eq 1 ]]; then
     if [[ $DO_TRACE -eq 1 ]]; then
-        progress "${YELLOW}► Testing connectivity + tracing route (slow — up to ~60s; output appears when done)...${RESET}"
+        progress "${YELLOW}► Testing connectivity + tracing route (slow — up to ~60s; ${TRACE_NOTE})...${RESET}"
     else
         progress "${YELLOW}► Testing connectivity...${RESET}"
     fi
