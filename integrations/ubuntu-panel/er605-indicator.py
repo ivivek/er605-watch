@@ -16,6 +16,8 @@
 # =============================================================
 import os
 import json
+import shlex
+import shutil
 import threading
 import subprocess
 
@@ -120,6 +122,34 @@ class ER605Indicator:
         self._busy = False
         return False
 
+    # ---- traceroute ----------------------------------------------
+    # Trace is slow (~30-60s) and multi-line, so run it in a terminal where the
+    # user sees live hop-by-hop output, rather than cramming it into the menu.
+    _TERMINALS = [
+        ("gnome-terminal", lambda c: ["gnome-terminal", "--", "bash", "-lc", c]),
+        ("konsole",        lambda c: ["konsole", "-e", "bash", "-lc", c]),
+        ("tilix",          lambda c: ["tilix", "-e", "bash", "-lc", c]),
+        ("xfce4-terminal", lambda c: ["xfce4-terminal", "-x", "bash", "-lc", c]),
+        ("x-terminal-emulator", lambda c: ["x-terminal-emulator", "-e", "bash", "-lc", c]),
+        ("xterm",          lambda c: ["xterm", "-e", "bash", "-lc", c]),
+    ]
+
+    def _traceroute(self):
+        inner = (f"{shlex.quote(WATCH)} --trace; "
+                 "echo; read -rsn1 -p 'Traceroute done — press any key to close… '")
+        for binary, build in self._TERMINALS:
+            if shutil.which(binary):
+                try:
+                    subprocess.Popen(build(inner))   # non-blocking; runs in its own window
+                    return
+                except Exception:
+                    continue
+        dlg = Gtk.MessageDialog(modal=False, message_type=Gtk.MessageType.WARNING,
+                                buttons=Gtk.ButtonsType.OK, text="No terminal emulator found")
+        dlg.format_secondary_text(f"Run it yourself:\n{WATCH} --trace")
+        dlg.connect("response", lambda d, _r: d.destroy())
+        dlg.show()
+
     # ---- rendering -----------------------------------------------
     def _render(self, data):
         overall = data.get("overall", "unknown")
@@ -180,6 +210,7 @@ class ER605Indicator:
         self._sep()
         self._action("Refresh now", lambda _: self.refresh(False, manual=True))
         self._action("Full check (ping / RTT)", lambda _: self.refresh(True, manual=True))
+        self._action("Traceroute (opens terminal)", lambda _: self._traceroute())
         self._sep()
         self._action("Quit", lambda _: Gtk.main_quit())
         self.menu.show_all()

@@ -57,6 +57,10 @@ To bake an interval into autostart, add it to the `Exec=` line in
 - **Full check (ping/RTT)** — run `--full` once (pings each WAN gateway + a
   public IP), populating the per-WAN RTT/loss lines until the next periodic
   (fast) refresh overwrites them.
+- **Traceroute (opens terminal)** — launches `er605-watch --trace` in a terminal
+  window so you see live, hop-by-hop output (it's slow, ~30–60s, and multi-line —
+  hence a terminal, not the dropdown). Detects `gnome-terminal`/`konsole`/`xterm`/
+  etc.; if none is found it shows the command to run yourself.
 - **Quit** — stop the indicator (autostart still brings it back next login).
 
 Clicking a menu item closes the menu (standard GTK behavior), so a manual
