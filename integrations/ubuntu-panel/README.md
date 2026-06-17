@@ -59,6 +59,12 @@ To bake an interval into autostart, add it to the `Exec=` line in
   (fast) refresh overwrites them.
 - **Quit** — stop the indicator (autostart still brings it back next login).
 
+Clicking a menu item closes the menu (standard GTK behavior), so a manual
+Refresh / Full check shows feedback in the panel instead: the status icon is
+**replaced by a braille spinner** while it runs (~3s fast, ~13s full), then the
+icon returns — reopen the menu to see the fresh result. The silent 60s
+background poll does not spin.
+
 ## Notes / troubleshooting
 
 - **No icon appears:** confirm an AppIndicator extension is enabled

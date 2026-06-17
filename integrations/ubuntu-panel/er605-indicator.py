@@ -58,6 +58,8 @@ class ER605Indicator:
         self.menu = Gtk.Menu()
         self.ind.set_menu(self.menu)
         self._busy = False
+        self._spin_idx = 0
+        self._spin_source = None
         self._render({"overall": "unknown", "_note": "starting…"})
 
         GLib.timeout_add(500, self._kick_once)
@@ -72,11 +74,34 @@ class ER605Indicator:
         self.refresh(full=False)
         return True
 
-    def refresh(self, full=False):
+    def refresh(self, full=False, manual=False):
         if self._busy:
             return
         self._busy = True
+        if manual:                       # spinner only for user-clicked checks,
+            self._start_spinner()        # not the silent 60s background poll
         threading.Thread(target=self._worker, args=(full,), daemon=True).start()
+
+    # A braille spinner in the panel label while a poll runs. Clicking a menu
+    # item closes the menu, so feedback has to live in the always-visible panel.
+    # While it spins we blank the panel icon so only the spinner shows; _render
+    # restores the real state icon when the poll completes.
+    _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def _start_spinner(self):
+        if self._spin_source is None:
+            self._spin_idx = 0
+            self.ind.set_icon_full("er605-blank", "checking…")
+            self._spin_source = GLib.timeout_add(90, self._spin)
+
+    def _spin(self):
+        if not self._busy:                       # poll finished → clear + stop
+            self.ind.set_label("", "er605-wan")
+            self._spin_source = None
+            return False
+        self.ind.set_label(self._SPINNER[self._spin_idx % len(self._SPINNER)], "er605-wan")
+        self._spin_idx += 1
+        return True
 
     def _worker(self, full):
         cmd = [WATCH, "--json"] + ([] if full else ["--fast"])
@@ -153,8 +178,8 @@ class ER605Indicator:
             self._info(f"<span size='small' alpha='55%'>Updated {esc(ts.replace('T', ' ')[:19])}</span>")
 
         self._sep()
-        self._action("Refresh now", lambda _: self.refresh(False))
-        self._action("Full check (ping / RTT)", lambda _: self.refresh(True))
+        self._action("Refresh now", lambda _: self.refresh(False, manual=True))
+        self._action("Full check (ping / RTT)", lambda _: self.refresh(True, manual=True))
         self._sep()
         self._action("Quit", lambda _: Gtk.main_quit())
         self.menu.show_all()
