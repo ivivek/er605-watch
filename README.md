@@ -214,7 +214,8 @@ contract documented under [`er605-watch`](#er605-watch--the-dual-wan-status-repo
   Discovery. Router credentials stay on the publisher box.
 - **[`integrations/ubuntu-panel/`](integrations/ubuntu-panel/)** — a **GNOME
   top-panel** tray indicator with a state-tinted icon and a per-WAN dropdown.
-  Runs `er605-watch` directly on your desktop (no broker needed).
+  Runs `er605-watch` directly on your desktop (no broker needed). Menu actions:
+  Refresh, Full check, and Traceroute (opens a terminal running `--trace-only`).
 - **[`integrations/ubuntu-panel-mqtt/`](integrations/ubuntu-panel-mqtt/)** — the
   same panel indicator, but **fed from MQTT** (subscribes to the publisher's
   `er605/status`) instead of driving the router. No router creds on the desktop;

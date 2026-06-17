@@ -102,8 +102,10 @@ doc in the root README).
   use a Home Assistant user.
 - **`ubuntu-panel/`** — Python GTK AppIndicator tray icon (state-tinted SVG in
   `icons/`, plain-text IP-free dropdown, manual-only spinner). Runs `er605-watch`
-  **directly** on the desktop. `install.sh` + GNOME autostart. Menu colour lives in
-  the panel icon only (GTK3 menus drop packed images / override label colour).
+  **directly** on the desktop. Menu actions: Refresh, Full check (`--full`),
+  **Traceroute** (opens a detected terminal running `er605-watch --trace-only`, since
+  the trace is slow/multi-line), Quit. `install.sh` + GNOME autostart. Menu colour
+  lives in the panel icon only (GTK3 menus drop packed images / override label colour).
 - **`ubuntu-panel-mqtt/`** — same tray UI, but **subscribes** to the publisher's
   `er605/status` (paho-mqtt) instead of driving the router — no router creds on the
   desktop. Push-driven (no Refresh/Full check); shows connection state + reason.
