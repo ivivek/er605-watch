@@ -92,7 +92,7 @@ Everything here exists to work around this device. Do not "simplify" these away:
 
 Optional front-ends that consume `er605-watch --json`; each is self-contained with
 its own README and does **not** change the core driver. The `--json` shape is the
-contract between them — **change it in one place, update all three** (+ the JSON
+contract between them — **change it in one place, update all of them** (+ the JSON
 doc in the root README).
 
 - **`home-assistant/`** — `er605-mqtt-publish.sh` runs `er605-watch --json` on a
@@ -111,6 +111,12 @@ doc in the root README).
   `er605/status` (paho-mqtt) instead of driving the router — no router creds on the
   desktop. Push-driven (no Refresh/Full check); shows connection state + reason.
   `mqtt-test.py` is a no-GUI CLI to debug the broker connection/creds/data.
+- **`ubuntu-panel-hybrid/`** — display via MQTT (the mqtt panel's subscribe code,
+  verbatim) **plus** the direct panel's **Traceroute** action (runs `er605-watch
+  --trace-only` in a terminal). So status needs only broker read access, but the
+  trace action additionally needs `er605-watch` + router creds (repo-root `.env`)
+  on this box; if missing, status still works and the action shows a dialog. Menu:
+  Traceroute, Reconnect, Quit. Broker creds in git-ignored `er605-hybrid.env`.
 
 ## Conventions
 

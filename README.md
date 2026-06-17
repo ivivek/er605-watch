@@ -219,9 +219,17 @@ contract documented under [`er605-watch`](#er605-watch--the-dual-wan-status-repo
 - **[`integrations/ubuntu-panel-mqtt/`](integrations/ubuntu-panel-mqtt/)** — the
   same panel indicator, but **fed from MQTT** (subscribes to the publisher's
   `er605/status`) instead of driving the router. No router creds on the desktop;
-  needs a broker. Use one panel indicator or the other, not both.
+  needs a broker.
+- **[`integrations/ubuntu-panel-hybrid/`](integrations/ubuntu-panel-hybrid/)** —
+  **display from MQTT** (like the MQTT panel) **plus** an on-demand **Traceroute**
+  that runs `er605-watch --trace-only` in a terminal (like the direct panel).
+  Status needs only broker read access; the Traceroute action also needs
+  `er605-watch` + router creds on this box.
 
-> Per-WAN ISP labels: set `WAN1_ISP` / `WAN2_ISP` in `.env` and both integrations
+> Run only **one** ER605 panel indicator (direct, MQTT, or hybrid) — each adds its
+> own panel icon.
+
+> Per-WAN ISP labels: set `WAN1_ISP` / `WAN2_ISP` in `.env` and the integrations
 > (and the CLI) show e.g. "Airtel Fiber (WAN1)" in place of "WAN1".
 
 ---

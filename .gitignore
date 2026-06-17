@@ -9,6 +9,9 @@ integrations/home-assistant/er605-mqtt.env
 # Ubuntu MQTT panel's broker config (holds broker creds).
 integrations/ubuntu-panel-mqtt/er605-mqtt-panel.env
 
+# Ubuntu hybrid panel's broker config (holds broker creds).
+integrations/ubuntu-panel-hybrid/er605-hybrid.env
+
 # Python bytecode
 __pycache__/
 *.pyc
