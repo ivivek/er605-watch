@@ -67,6 +67,7 @@ tracked):
 ROUTER_IP=192.168.0.1
 ROUTER_PASS=yourpassword
 # optional: ROUTER_USER, ROUTER_PORT, WAN1_PORT, WAN2_PORT, PING_PUBLIC, WAN1_GW, WAN2_GW
+# optional ISP labels: WAN1_ISP, WAN2_ISP  (shown as e.g. "Airtel Fiber (WAN1)")
 ```
 
 With `.env` in place you can just run `./er605-watch`. Override ad-hoc without
@@ -127,11 +128,12 @@ stderr), `--trace`/`-t`, `--host`/`-H <ip>`.
 WANs down · `3` router unreachable · `4` usage/config error. So a "both WANs down"
 alert is just `er605-watch --fast >/dev/null 2>&1 || [ $? -eq 2 ] && notify…`.
 
-**JSON shape** (`--json`): `{timestamp, router, mode, overall, wans:[{port,name,type,
-status,proto,ip,gateway,up,ping:{target,loss_pct,rtt_ms,state,online}}], internet,
+**JSON shape** (`--json`): `{timestamp, router, mode, overall, wans:[{port,name,isp,
+type,status,proto,ip,gateway,up,ping:{target,loss_pct,rtt_ms,state,online}}], internet,
 arp:[{interface,ip,mac,type}], traceroute}`. In `--fast` mode `ping`/`internet` are
-`null` and `up` comes from the switchport link status. This feeds a status-bar
-module, a tray app, Home Assistant, Prometheus, etc.
+`null` and `up` comes from the switchport link status. `isp` is the friendly
+`WAN*_ISP` label (falls back to `WAN1`/`WAN2`). This feeds a status-bar module, a
+tray app, Home Assistant, Prometheus, etc.
 
 What it does (`expect`-driven — waits on the `#` prompt, no blind sleeps; one SSH
 login if `WAN*_GW` are set, otherwise two — see the gateway note below):
@@ -156,7 +158,8 @@ login if `WAN*_GW` are set, otherwise two — see the gateway note below):
 
 Configurable via `.env` / env vars (see [Configuration](#configuration)):
 `ROUTER_IP`, `ROUTER_USER`, `ROUTER_PORT`, `WAN1_PORT`, `WAN2_PORT`, `PING_PUBLIC`,
-and `WAN1_GW` / `WAN2_GW`.
+`WAN1_GW` / `WAN2_GW`, and `WAN1_ISP` / `WAN2_ISP` (friendly ISP labels shown in the
+output, the `isp` JSON field, and the integrations — e.g. "Airtel Fiber (WAN1)").
 
 **On the gateways (dynamic vs. speed):** by default `WAN1_GW` / `WAN2_GW` are
 **blank**, so the script auto-discovers each WAN's gateway live from

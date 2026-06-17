@@ -17,6 +17,9 @@ firmware 2.3.0**; parsing is matched to that firmware's exact text output.
   ~3s), `--json`/`-j` (emit JSON on stdout, progress→stderr; needs `jq`).
   **Exit codes:** `0` all up · `1` one down · `2` both down · `3` router unreachable
   · `4` usage/config. These are an API — keep them stable for cron/alert consumers.
+  Optional `WAN1_ISP`/`WAN2_ISP` (`.env`) add a friendly label per WAN — shown as
+  e.g. "Airtel Fiber (WAN1)" in output and as each WAN's `isp` field in `--json`
+  (falls back to `WAN1`/`WAN2`). The JSON shape is a contract — see §integrations.
 - **`probe_cli.sh`** — dev tool. Dumps the *raw* output of arbitrary CLI commands
   using the older `sleep`-paced driver (+`sshpass`). Use it to discover the command
   grammar / output format on a new firmware before touching parsers.
@@ -82,6 +85,28 @@ Everything here exists to work around this device. Do not "simplify" these away:
   (built with `jq`, never string-concatenated). All progress goes through
   `progress()` → stderr so `--json` stdout stays pure. Add new data once in the
   gather/derive step; surface it in both renderers.
+
+## Integrations (`integrations/`)
+
+Optional front-ends that consume `er605-watch --json`; each is self-contained with
+its own README and does **not** change the core driver. The `--json` shape is the
+contract between them — **change it in one place, update all three** (+ the JSON
+doc in the root README).
+
+- **`home-assistant/`** — `er605-mqtt-publish.sh` runs `er605-watch --json` on a
+  timer and publishes status + MQTT Discovery configs to a Mosquitto broker; HA
+  auto-creates entities. Broker creds in git-ignored `er605-mqtt.env`. Robustness
+  via `expire_after` (not LWT); systemd timer. Deployed live: a Raspberry Pi
+  publisher → HAOS Mosquitto. Auth gotcha: the add-on `logins:` field is flaky —
+  use a Home Assistant user.
+- **`ubuntu-panel/`** — Python GTK AppIndicator tray icon (state-tinted SVG in
+  `icons/`, plain-text IP-free dropdown, manual-only spinner). Runs `er605-watch`
+  **directly** on the desktop. `install.sh` + GNOME autostart. Menu colour lives in
+  the panel icon only (GTK3 menus drop packed images / override label colour).
+- **`ubuntu-panel-mqtt/`** — same tray UI, but **subscribes** to the publisher's
+  `er605/status` (paho-mqtt) instead of driving the router — no router creds on the
+  desktop. Push-driven (no Refresh/Full check); shows connection state + reason.
+  `mqtt-test.py` is a no-GUI CLI to debug the broker connection/creds/data.
 
 ## Conventions
 
