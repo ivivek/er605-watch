@@ -132,9 +132,11 @@ alert is just `er605-watch --fast >/dev/null 2>&1 || [ $? -eq 2 ] && notify…`.
 **JSON shape** (`--json`): `{timestamp, router, mode, overall, wans:[{port,name,isp,
 type,status,proto,ip,gateway,up,ping:{target,loss_pct,rtt_ms,state,online}}], internet,
 arp:[{interface,ip,mac,type}], traceroute}`. In `--fast` mode `ping`/`internet` are
-`null` and `up` comes from the switchport link status. `isp` is the friendly
-`WAN*_ISP` label (falls back to `WAN1`/`WAN2`). `mode` is `full` / `fast` /
-`trace-only`. This feeds a status-bar module, a tray app, Home Assistant,
+`null` and `up` comes from the switchport link status. In `--trace-only` mode the
+WAN/ARP/ping queries are skipped entirely, so each WAN is `state:"skipped"`/`up:false`,
+`arp` is `[]`, and `internet` is `null` — only `traceroute` is populated. `isp` is the
+friendly `WAN*_ISP` label (falls back to `WAN1`/`WAN2`). `mode` is `full` / `fast` /
+`trace-only`. This feeds a status-bar module, tray apps, Home Assistant,
 Prometheus, etc.
 
 What it does (`expect`-driven — waits on the `#` prompt, no blind sleeps; one SSH
@@ -156,7 +158,9 @@ login if `WAN*_GW` are set, otherwise two — see the gateway note below):
 5. **`--trace` / `-t`** (optional) — appends a `tracert` to the public target.
    Useful, but **slow**: traceroute waits out a timeout on every unresponsive
    (`* * *`) hop, so a single trace can take ~30–60s. Hop 1 reveals which WAN
-   the active route used.
+   the active route used. In a terminal (non-`--json`) the hops **stream live** as
+   the router emits them. **`--trace-only`** runs just the trace — it skips the
+   switchport/ARP/ping queries entirely (handy for the panel Traceroute action).
 
 Configurable via `.env` / env vars (see [Configuration](#configuration)):
 `ROUTER_IP`, `ROUTER_USER`, `ROUTER_PORT`, `WAN1_PORT`, `WAN2_PORT`, `PING_PUBLIC`,

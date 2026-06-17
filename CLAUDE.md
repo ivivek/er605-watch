@@ -75,6 +75,11 @@ Everything here exists to work around this device. Do not "simplify" these away:
   command waiting on `#`, then `close`s. Returns the full raw session text. The
   `expect` blocks use the simple single-pattern form (`expect "#"`) — the multi-arg
   `expect { -re {..} {..} timeout {..} }` form mis-parses here, so don't reintroduce it.
+  When `STREAM_TTY` is in the environment (set for non-JSON `--trace`/`--trace-only`
+  runs), `run_cli` also tees the `tracert` command's output to `/dev/tty` live so
+  hops appear as they arrive — `log_user` stays 1 so stdout is still captured for
+  parsing. The tty channel **must** be `-buffering none`; otherwise Tcl buffers it
+  and the whole trace flushes only on close (i.e. all at once).
 - **Parsing** is screen-scraping: `extract "$RAW" "<cmd>"` slices the output block for
   one command (between its `#<cmd>` echo and the next prompt); `get_field "$block"
   "<label>"` pulls a value from the `Field.....Value` (dots/colon separator) format.
