@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Block commits that introduce real secrets (private/site IPs, MACs, router or
+# broker passwords, private keys). Scans only the STAGED additions, so it's
+# fast and never re-flags pre-existing content. See hooks/secret-scan.sh for
+# the rules and hooks/README.md for setup. Bypass with `git commit --no-verify`.
+set -uo pipefail
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=secret-scan.sh
+source "$HOOK_DIR/secret-scan.sh"
+
+git diff --cached -U0 --no-color --diff-filter=ACM | run_scan

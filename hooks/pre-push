@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Last local gate before anything leaves the machine. Re-runs the secret scan
+# over the commits being pushed — a backstop for commits that were made with
+# `--no-verify` or before the hooks were installed. Bypass with
+# `git push --no-verify`. See hooks/secret-scan.sh for the rules.
+set -uo pipefail
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=secret-scan.sh
+source "$HOOK_DIR/secret-scan.sh"
+
+# Empty-tree object id (sha1 or sha256 repo) — diff base for a brand-new branch.
+EMPTY_TREE="$(git hash-object -t tree /dev/null)"
+
+fail=0
+# stdin: <local ref> <local sha> <remote ref> <remote sha>, one line per ref.
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+    [[ "$local_sha" =~ ^0+$ ]] && continue          # branch deletion — nothing to scan
+    if [[ "$remote_sha" =~ ^0+$ ]]; then
+        base="$EMPTY_TREE"                          # new branch — scan its whole tree
+    else
+        base="$remote_sha"                          # update — scan only the new delta
+    fi
+    git diff -U0 --no-color --diff-filter=ACM "$base" "$local_sha" | run_scan || fail=1
+done
+
+exit "$fail"

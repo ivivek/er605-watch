@@ -262,6 +262,23 @@ contract documented under [`er605-watch`](#er605-watch--the-dual-wan-status-repo
   format. A different firmware version may change field labels; use `probe_cli.sh`
   to re-check and adjust the parsers.
 
+## Secret-scanning git hooks
+
+This repo's hard rule is **no real IPs, passwords, gateways, MACs, usernames, or
+hostnames in tracked files** — only placeholders. To enforce it locally,
+`hooks/` ships dependency-free `pre-commit` / `pre-push` hooks that scan the
+diff for private/site IPs, MACs, hardcoded credentials, and private keys, and
+block the commit/push if any slip in.
+
+```bash
+./hooks/install.sh        # enable (sets core.hooksPath; run once per clone)
+```
+
+Bypass a false positive with `--no-verify`, or allowlist a literal in
+`hooks/secret-allow.txt`. These are **local** hooks (skippable, per-clone) — for
+an unbypassable layer, also enable GitHub Push Protection / a CI scanner. Full
+details: [`hooks/README.md`](hooks/README.md).
+
 ## License
 
 [MIT](LICENSE) © Vivek K (ivivek)
