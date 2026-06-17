@@ -13,8 +13,9 @@ firmware 2.3.0**; parsing is matched to that firmware's exact text output.
 
 - **`er605-watch`** — the main tool (the repo's command). Reports per-WAN
   status/IP/gateway/DNS and pings each WAN's gateway + a public IP. Flags:
-  `--trace`/`-t` (full check then a slow traceroute), `--trace-only` (traceroute but
-  skip pings — WAN status from link state; `mode:"trace-only"`), `--fast`/`-f` (skip
+  `--trace`/`-t` (full check then a slow traceroute), `--trace-only` (pure traceroute
+  — skips the switchport/ARP/ping queries entirely, so WANs report `state:"skipped"`/
+  `up:false`; `mode:"trace-only"`), `--fast`/`-f` (skip
   pings → link status only, ~3s), `--json`/`-j` (emit JSON on stdout, progress→stderr; needs `jq`).
   **Exit codes:** `0` all up · `1` one down · `2` both down · `3` router unreachable
   · `4` usage/config. These are an API — keep them stable for cron/alert consumers.

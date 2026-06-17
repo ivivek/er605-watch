@@ -10,7 +10,7 @@
 #        ./er605-watch --host <ip> <password> [flags]
 #        ROUTER_IP=... ROUTER_PASS=... ./er605-watch
 #   --trace / -t  : full check, then also run a traceroute to the public target (slow)
-#   --trace-only  : run the traceroute but skip the pings (WAN status from link state)
+#   --trace-only  : pure traceroute — skip the WAN/ARP/ping queries entirely
 #   --fast / -f   : link status only, skip pings/traceroute (~3s, no connectivity)
 #   --json / -j   : emit a JSON object on stdout (needs jq); progress -> stderr
 # Exit codes: 0 all WANs up · 1 one down · 2 both down · 3 router unreachable
@@ -74,8 +74,8 @@ done
 # Fast mode skips all connectivity tests (and therefore traceroute).
 DO_PINGS=1
 [[ $FAST_MODE -eq 1 ]] && { DO_PINGS=0; DO_TRACE=0; }
-# Trace-only: run the traceroute but skip the per-WAN/internet pings (WAN up/down
-# then comes from link status, like fast mode). Applied after fast so it wins.
+# Trace-only: a pure traceroute — skip the per-WAN/internet pings (and, later, the
+# switchport + ARP queries too; WANs report state "skipped"). After fast so it wins.
 [[ $TRACE_ONLY -eq 1 ]] && { DO_PINGS=0; DO_TRACE=1; }
 
 # Stream traceroute hops to the terminal live (pretty mode only). In --json the
@@ -287,7 +287,7 @@ wan_json() {
     jq -n --argjson port "$1" --arg name "$2" --arg isp "${12}" --arg type "$3" --arg status "$4" \
           --arg proto "$5" --arg ip "$6" --arg gw "$7" --arg st "$8" --argjson ping "$ping" \
         '{port:$port, name:$name, isp:$isp, type:$type, status:$status, proto:$proto,
-          ip:$ip, gateway:$gw, up:($st!="offline"), ping:$ping}'
+          ip:$ip, gateway:$gw, up:($st=="online" or $st=="degraded"), ping:$ping}'
 }
 
 # ─── MAIN ─────────────────────────────────────────────────────
@@ -298,25 +298,29 @@ wan_json() {
 DISCOVER=0
 [[ -z "$WAN1_GW" || -z "$WAN2_GW" ]] && DISCOVER=1
 
-CMDS=(
-    "show interface switchport ${WAN1_PORT}"
-    "show interface switchport ${WAN2_PORT}"
-    "show arp"
-)
-if [[ $DO_PINGS -eq 1 && $DISCOVER -eq 0 ]]; then
-    [[ "$WAN1_GW" != "0.0.0.0" ]] && CMDS+=("ping ${WAN1_GW}")
-    [[ "$WAN2_GW" != "0.0.0.0" ]] && CMDS+=("ping ${WAN2_GW}")
-    CMDS+=("ping ${PING_PUBLIC}")
-    [[ $DO_TRACE -eq 1 ]] && CMDS+=("tracert ${PING_PUBLIC}")
-elif [[ $DO_PINGS -eq 0 && $DO_TRACE -eq 1 ]]; then
-    # Trace-only: no pings, just the trace. Target is the fixed public IP, so no
-    # gateway discovery is needed — it all fits in this single login.
-    CMDS+=("tracert ${PING_PUBLIC}")
+if [[ $TRACE_ONLY -eq 1 ]]; then
+    # Trace-only is a pure traceroute — skip the switchport + ARP queries
+    # entirely (no WAN status, no ARP table). One login, just the trace.
+    CMDS=("tracert ${PING_PUBLIC}")
+else
+    CMDS=(
+        "show interface switchport ${WAN1_PORT}"
+        "show interface switchport ${WAN2_PORT}"
+        "show arp"
+    )
+    if [[ $DO_PINGS -eq 1 && $DISCOVER -eq 0 ]]; then
+        [[ "$WAN1_GW" != "0.0.0.0" ]] && CMDS+=("ping ${WAN1_GW}")
+        [[ "$WAN2_GW" != "0.0.0.0" ]] && CMDS+=("ping ${WAN2_GW}")
+        CMDS+=("ping ${PING_PUBLIC}")
+        [[ $DO_TRACE -eq 1 ]] && CMDS+=("tracert ${PING_PUBLIC}")
+    fi
 fi
 
-# If the trace runs in this login (trace-only, or full --trace with gateways set),
-# say so — it's slow and the expect driver shows nothing until it finishes.
-if [[ $DO_TRACE -eq 1 && ( $TRACE_ONLY -eq 1 || $DISCOVER -eq 0 ) ]]; then
+# Trace running in this login → it's slow and (in pretty mode) streams hops live;
+# tell the user so it doesn't look stuck.
+if [[ $TRACE_ONLY -eq 1 ]]; then
+    progress "${YELLOW}► Tracing route to ${PING_PUBLIC} (slow — dead hops time out, up to ~60s; ${TRACE_NOTE})...${RESET}"
+elif [[ $DO_TRACE -eq 1 && $DISCOVER -eq 0 ]]; then
     progress "${YELLOW}► Querying router + tracing route to ${PING_PUBLIC} (slow — dead hops time out, up to ~60s; ${TRACE_NOTE})...${RESET}"
 else
     progress "${YELLOW}► Querying router...${RESET}"
@@ -378,6 +382,9 @@ if [[ $DO_PINGS -eq 1 ]]; then
     w2_loss=$(parse_loss "$(extract "$PRAW" "ping ${g2}")");          w2_rtt=$(parse_rtt "$(extract "$PRAW" "ping ${g2}")")
     inet_loss=$(parse_loss "$(extract "$PRAW" "ping ${PING_PUBLIC}")"); inet_rtt=$(parse_rtt "$(extract "$PRAW" "ping ${PING_PUBLIC}")")
     w1_state=$(ping_state "$w1_loss"); w2_state=$(ping_state "$w2_loss"); inet_state=$(ping_state "$inet_loss")
+elif [[ $TRACE_ONLY -eq 1 ]]; then
+    # Trace-only: WAN/ARP not queried, so there's no status to derive.
+    w1_state="skipped"; w2_state="skipped"; inet_state="skipped"
 else
     # Fast mode: liveness from the switchport "Routing Interface Status".
     [[ "${w1_status^^}" == "UP" ]] && w1_state=online || w1_state=offline
@@ -432,37 +439,41 @@ if [[ $JSON_MODE -eq 1 ]]; then
     exit $EXIT
 fi
 
-# Pretty (human) output.
-show_wan "$WAN1_BLOCK" "WAN1" "$WAN1_GW" "$WAN1_ISP"
-show_wan "$WAN2_BLOCK" "WAN2" "$WAN2_GW" "$WAN2_ISP"
-
-echo -e "${BOLD}── ARP Table ─────────────────────────────────────${RESET}"
-grep -vE '^[[:space:]]*$' <<< "$ARP_BLOCK" | sed 's/^/  /'
-echo ""
-
-echo -e "${BOLD}${CYAN}══════════════════════════════════════════════${RESET}"
-echo -e "${BOLD}  Summary${RESET}"
-echo -e "${BOLD}${CYAN}══════════════════════════════════════════════${RESET}"
-if [[ $DO_PINGS -eq 1 ]]; then
-    summarise_gw "$PRAW" "$g1" "${lbl1} gw "
-    summarise_gw "$PRAW" "$g2" "${lbl2} gw "
-    ping_result "$(extract "$PRAW" "ping ${PING_PUBLIC}")" "Internet" "$PING_PUBLIC"
+# Pretty (human) output. Trace-only is a pure traceroute — skip the WAN blocks,
+# ARP table, and WAN summary entirely; jump straight to the traceroute below.
+if [[ $TRACE_ONLY -eq 1 ]]; then
+    echo -e "  ${YELLOW}trace-only mode${RESET} — WAN status, ARP, and pings skipped. Traceroute below."
     echo ""
-    echo -e "  ${CYAN}Note:${RESET} per-WAN lines ping each WAN's own gateway (true per-link health)."
-    echo -e "        The Internet line follows the router's active route (load-balance/failover)."
-elif [[ $TRACE_ONLY -eq 1 ]]; then
-    echo -e "  ${YELLOW}trace-only mode${RESET} — pings skipped; WAN status from link state. Traceroute below."
 else
-    echo -e "  ${YELLOW}fast mode${RESET} — link status only, connectivity tests skipped."
+    show_wan "$WAN1_BLOCK" "WAN1" "$WAN1_GW" "$WAN1_ISP"
+    show_wan "$WAN2_BLOCK" "WAN2" "$WAN2_GW" "$WAN2_ISP"
+
+    echo -e "${BOLD}── ARP Table ─────────────────────────────────────${RESET}"
+    grep -vE '^[[:space:]]*$' <<< "$ARP_BLOCK" | sed 's/^/  /'
+    echo ""
+
+    echo -e "${BOLD}${CYAN}══════════════════════════════════════════════${RESET}"
+    echo -e "${BOLD}  Summary${RESET}"
+    echo -e "${BOLD}${CYAN}══════════════════════════════════════════════${RESET}"
+    if [[ $DO_PINGS -eq 1 ]]; then
+        summarise_gw "$PRAW" "$g1" "${lbl1} gw "
+        summarise_gw "$PRAW" "$g2" "${lbl2} gw "
+        ping_result "$(extract "$PRAW" "ping ${PING_PUBLIC}")" "Internet" "$PING_PUBLIC"
+        echo ""
+        echo -e "  ${CYAN}Note:${RESET} per-WAN lines ping each WAN's own gateway (true per-link health)."
+        echo -e "        The Internet line follows the router's active route (load-balance/failover)."
+    else
+        echo -e "  ${YELLOW}fast mode${RESET} — link status only, connectivity tests skipped."
+    fi
+    case "$OVERALL" in
+        ok)       OC=$GREEN ;;
+        degraded) OC=$YELLOW ;;
+        *)        OC=$RED ;;
+    esac
+    echo ""
+    echo -e "  Overall : ${OC}${OVERALL^^}${RESET}  (exit $EXIT)"
+    echo ""
 fi
-case "$OVERALL" in
-    ok)       OC=$GREEN ;;
-    degraded) OC=$YELLOW ;;
-    *)        OC=$RED ;;
-esac
-echo ""
-echo -e "  Overall : ${OC}${OVERALL^^}${RESET}  (exit $EXIT)"
-echo ""
 
 # ─── Traceroute (opt-in) ──────────────────────────────────────
 if [[ $DO_TRACE -eq 1 ]]; then

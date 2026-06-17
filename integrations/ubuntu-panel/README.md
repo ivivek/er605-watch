@@ -59,8 +59,8 @@ To bake an interval into autostart, add it to the `Exec=` line in
   (fast) refresh overwrites them.
 - **Traceroute (opens terminal)** — launches `er605-watch --trace-only` in a terminal
   window so you see live, hop-by-hop output (it's slow, ~30–60s, and multi-line —
-  hence a terminal, not the dropdown). `--trace-only` skips the pings, so it's just
-  the trace. Detects `gnome-terminal`/`konsole`/`xterm`/etc.; if none is found it
+  hence a terminal, not the dropdown). `--trace-only` skips the WAN/ARP/ping queries,
+  so it's just the trace. Detects `gnome-terminal`/`konsole`/`xterm`/etc.; if none is found it
   shows the command to run yourself.
 - **Quit** — stop the indicator (autostart still brings it back next login).
 

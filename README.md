@@ -122,8 +122,8 @@ interactive terminal session** — not a clean request/response API. The scripts
 
 **Flags:** `--fast`/`-f` (skip all pings/traceroute — instant link-status check, good
 for frequent polling), `--json`/`-j` (emit one JSON object on stdout, progress on
-stderr), `--trace`/`-t` (full check **then** a traceroute), `--trace-only` (traceroute
-but skip the pings — WAN status from link state), `--host`/`-H <ip>`.
+stderr), `--trace`/`-t` (full check **then** a traceroute), `--trace-only` (a pure
+traceroute — skips the WAN/ARP/ping queries entirely), `--host`/`-H <ip>`.
 
 **Exit codes** (for cron/alerting): `0` all WANs up · `1` one WAN down · `2` both
 WANs down · `3` router unreachable · `4` usage/config error. So a "both WANs down"
