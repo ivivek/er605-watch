@@ -135,7 +135,7 @@ class ER605Indicator:
     ]
 
     def _traceroute(self):
-        inner = (f"{shlex.quote(WATCH)} --trace; "
+        inner = (f"{shlex.quote(WATCH)} --trace-only; "
                  "echo; read -rsn1 -p 'Traceroute done — press any key to close… '")
         for binary, build in self._TERMINALS:
             if shutil.which(binary):

@@ -5,13 +5,14 @@
 #
 # Config precedence (highest first): CLI flag > inline env var > env file.
 #   Env file : .env next to this script (git-ignored). See .env.example.
-# Usage: ./er605-watch [--trace] [--fast] [--json]
+# Usage: ./er605-watch [--trace] [--trace-only] [--fast] [--json]
 #        ./er605-watch <password> [flags]
 #        ./er605-watch --host <ip> <password> [flags]
 #        ROUTER_IP=... ROUTER_PASS=... ./er605-watch
-#   --trace / -t : also run a traceroute to the public target (slow)
-#   --fast / -f  : link status only, skip pings/traceroute (~3s, no connectivity)
-#   --json / -j  : emit a JSON object on stdout (needs jq); progress -> stderr
+#   --trace / -t  : full check, then also run a traceroute to the public target (slow)
+#   --trace-only  : run the traceroute but skip the pings (WAN status from link state)
+#   --fast / -f   : link status only, skip pings/traceroute (~3s, no connectivity)
+#   --json / -j   : emit a JSON object on stdout (needs jq); progress -> stderr
 # Exit codes: 0 all WANs up · 1 one down · 2 both down · 3 router unreachable
 #             · 4 usage/config error
 # =============================================================
@@ -52,17 +53,19 @@ WAN2_ISP="${WAN2_ISP:-}"
 # Public IP to test overall internet reachability (follows the active route)
 PING_PUBLIC="${PING_PUBLIC:-8.8.8.8}"
 
-# CLI args (override everything): [--host <ip>] [--trace] [--fast] [--json] [<password>].
+# CLI args (override everything): [--host <ip>] [--trace] [--trace-only] [--fast] [--json] [<password>].
 # Traceroute follows the active route only, so it traces whichever WAN carries it.
 DO_TRACE="${DO_TRACE:-0}"; FAST_MODE="${FAST:-0}"; JSON_MODE="${JSON:-0}"
+TRACE_ONLY="${TRACE_ONLY:-0}"
 PASS_ARG=""; HOST_ARG=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --trace|-t) DO_TRACE=1; shift ;;
-        --fast|-f)  FAST_MODE=1; shift ;;
-        --json|-j)  JSON_MODE=1; shift ;;
-        --host|-H)  HOST_ARG="$2"; shift 2 ;;
-        *)          PASS_ARG="$1"; shift ;;
+        --trace|-t)    DO_TRACE=1; shift ;;
+        --trace-only)  DO_TRACE=1; TRACE_ONLY=1; shift ;;
+        --fast|-f)     FAST_MODE=1; shift ;;
+        --json|-j)     JSON_MODE=1; shift ;;
+        --host|-H)     HOST_ARG="$2"; shift 2 ;;
+        *)             PASS_ARG="$1"; shift ;;
     esac
 done
 [[ -n "$HOST_ARG" ]] && ROUTER_IP="$HOST_ARG"
@@ -71,6 +74,9 @@ done
 # Fast mode skips all connectivity tests (and therefore traceroute).
 DO_PINGS=1
 [[ $FAST_MODE -eq 1 ]] && { DO_PINGS=0; DO_TRACE=0; }
+# Trace-only: run the traceroute but skip the per-WAN/internet pings (WAN up/down
+# then comes from link status, like fast mode). Applied after fast so it wins.
+[[ $TRACE_ONLY -eq 1 ]] && { DO_PINGS=0; DO_TRACE=1; }
 
 if [[ -z "$ROUTER_IP" ]]; then
     echo "ERROR: no router IP. Set ROUTER_IP in $CONFIG_FILE, pass --host <ip>, or export ROUTER_IP." >&2
@@ -277,9 +283,19 @@ if [[ $DO_PINGS -eq 1 && $DISCOVER -eq 0 ]]; then
     [[ "$WAN2_GW" != "0.0.0.0" ]] && CMDS+=("ping ${WAN2_GW}")
     CMDS+=("ping ${PING_PUBLIC}")
     [[ $DO_TRACE -eq 1 ]] && CMDS+=("tracert ${PING_PUBLIC}")
+elif [[ $DO_PINGS -eq 0 && $DO_TRACE -eq 1 ]]; then
+    # Trace-only: no pings, just the trace. Target is the fixed public IP, so no
+    # gateway discovery is needed — it all fits in this single login.
+    CMDS+=("tracert ${PING_PUBLIC}")
 fi
 
-progress "${YELLOW}► Querying router...${RESET}"
+# If the trace runs in this login (trace-only, or full --trace with gateways set),
+# say so — it's slow and the expect driver shows nothing until it finishes.
+if [[ $DO_TRACE -eq 1 && ( $TRACE_ONLY -eq 1 || $DISCOVER -eq 0 ) ]]; then
+    progress "${YELLOW}► Querying router + tracing route to ${PING_PUBLIC} (slow — dead hops time out, up to ~60s; output appears when done)...${RESET}"
+else
+    progress "${YELLOW}► Querying router...${RESET}"
+fi
 RAW=$(run_cli "${CMDS[@]}")
 
 if ! grep -q '#' <<< "$RAW"; then
@@ -318,7 +334,11 @@ lbl1="${WAN1_ISP:-WAN1}"; lbl2="${WAN2_ISP:-WAN2}"
 # Connectivity tests (skipped in --fast). Run a 2nd login if not already done.
 PRAW="$RAW"
 if [[ $DO_PINGS -eq 1 && $DISCOVER -eq 1 ]]; then
-    progress "${YELLOW}► Testing connectivity...${RESET}"
+    if [[ $DO_TRACE -eq 1 ]]; then
+        progress "${YELLOW}► Testing connectivity + tracing route (slow — up to ~60s; output appears when done)...${RESET}"
+    else
+        progress "${YELLOW}► Testing connectivity...${RESET}"
+    fi
     PING_CMDS=()
     [[ -n "$g1" && "$g1" != "0.0.0.0" ]] && PING_CMDS+=("ping ${g1}")
     [[ -n "$g2" && "$g2" != "0.0.0.0" ]] && PING_CMDS+=("ping ${g2}")
@@ -378,7 +398,7 @@ if [[ $JSON_MODE -eq 1 ]]; then
 
     jq -n \
         --arg ts "$(date -Is)" --arg router "$ROUTER_IP" \
-        --arg mode "$([[ $DO_PINGS -eq 1 ]] && echo full || echo fast)" \
+        --arg mode "$([[ $TRACE_ONLY -eq 1 ]] && echo trace-only || { [[ $DO_PINGS -eq 1 ]] && echo full || echo fast; })" \
         --argjson wan1 "$wan1_obj" --argjson wan2 "$wan2_obj" \
         --argjson internet "$internet_obj" --arg overall "$OVERALL" \
         --argjson arp "$arp_json" --argjson traceroute "$trace_json" \
@@ -405,6 +425,8 @@ if [[ $DO_PINGS -eq 1 ]]; then
     echo ""
     echo -e "  ${CYAN}Note:${RESET} per-WAN lines ping each WAN's own gateway (true per-link health)."
     echo -e "        The Internet line follows the router's active route (load-balance/failover)."
+elif [[ $TRACE_ONLY -eq 1 ]]; then
+    echo -e "  ${YELLOW}trace-only mode${RESET} — pings skipped; WAN status from link state. Traceroute below."
 else
     echo -e "  ${YELLOW}fast mode${RESET} — link status only, connectivity tests skipped."
 fi
