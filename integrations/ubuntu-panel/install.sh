@@ -6,16 +6,32 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY="$HERE/er605-indicator.py"
 
-echo ">> installing dependencies (needs sudo for apt)…"
+echo ">> checking dependencies…"
 if command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update -qq
-    # PyGObject + an AppIndicator binding (prefer the maintained Ayatana fork).
-    sudo apt-get install -y python3-gi gir1.2-gtk-3.0
-    sudo apt-get install -y gir1.2-ayatanaappindicator3-0.1 \
-        || sudo apt-get install -y gir1.2-appindicator3-0.1 \
-        || { echo "!! could not install an AppIndicator binding"; exit 1; }
-    # er605-watch's own deps (no-ops if already present).
-    sudo apt-get install -y expect jq openssh-client
+    # Collect only what's actually missing, so sudo is invoked only if needed.
+    # PyGObject + er605-watch's own deps.
+    need=()
+    for pkg in python3-gi gir1.2-gtk-3.0 expect jq openssh-client; do
+        dpkg -s "$pkg" >/dev/null 2>&1 || need+=("$pkg")
+    done
+    # AppIndicator: either binding satisfies it (prefer the Ayatana fork if we
+    # have to install). Only add one if neither is already present.
+    if ! dpkg -s gir1.2-ayatanaappindicator3-0.1 >/dev/null 2>&1 \
+        && ! dpkg -s gir1.2-appindicator3-0.1 >/dev/null 2>&1; then
+        need+=(gir1.2-ayatanaappindicator3-0.1)
+    fi
+
+    if [[ ${#need[@]} -eq 0 ]]; then
+        echo "   all dependencies present — skipping apt (no sudo needed)."
+    else
+        echo ">> installing missing deps (needs sudo for apt): ${need[*]}"
+        sudo apt-get update -qq
+        # Fall back to the older binding if the Ayatana one isn't in the repos.
+        sudo apt-get install -y "${need[@]}" \
+            || { [[ " ${need[*]} " == *" gir1.2-ayatanaappindicator3-0.1 "* ]] \
+                 && sudo apt-get install -y "${need[@]/gir1.2-ayatanaappindicator3-0.1/gir1.2-appindicator3-0.1}"; } \
+            || { echo "!! could not install dependencies: ${need[*]}"; exit 1; }
+    fi
 else
     echo "!! no apt-get — install manually: python3-gi, gir1.2-gtk-3.0,"
     echo "   gir1.2-ayatanaappindicator3-0.1 (or gir1.2-appindicator3-0.1), expect, jq"
